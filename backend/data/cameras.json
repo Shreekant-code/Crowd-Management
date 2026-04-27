@@ -1,0 +1,134 @@
+[
+  {
+    "id": "4bd5ba3a-202f-4b11-818a-40c17875168c",
+    "userId": "bfa936c0-33a3-4190-bc44-6a5870832b8b",
+    "name": "Shubham",
+    "zoneName": "Zone B",
+    "location": "Office",
+    "streamUrl": "http://10.100.110.226:8080/video",
+    "sourceType": "http",
+    "status": "stopped",
+    "createdAt": "2026-04-27T06:33:53.975Z",
+    "metrics": {
+      "count": 0,
+      "current_count": 0,
+      "total_count": 0,
+      "people_count": 0,
+      "active_track_ids": [],
+      "detections": [],
+      "heatmap_points": [],
+      "line_crossing": {
+        "entry": 0,
+        "exit": 0
+      },
+      "zone_counts": {
+        "left": 0,
+        "center": 0,
+        "right": 0
+      },
+      "crowd_features": {
+        "density_score": 0,
+        "movement_score": 0,
+        "congestion_score": 0,
+        "hotspot_ratio": 0
+      },
+      "risk": "Low",
+      "updatedAt": "2026-04-27T07:24:17.555Z",
+      "alerts": [],
+      "risk_score": 0,
+      "processing_status": "idle",
+      "density_count": 0,
+      "base_count": 0,
+      "predicted_crowd": 0,
+      "smoothed_count": 0,
+      "final_count": 0,
+      "source": "mockPredict",
+      "fallback_reason": "AI service request failed with status 404",
+      "frame_id": 60,
+      "density_map": [],
+      "density_context": {
+        "model": "CSRNet",
+        "enabled": false,
+        "used_density": false,
+        "track_count": 2
+      },
+      "temporal_context": {
+        "model": "ConvLSTM",
+        "enabled": false,
+        "sample_count": 8
+      },
+      "updated_at": "2026-04-27T06:39:01.369670+00:00",
+      "camera_id": "4bd5ba3a-202f-4b11-818a-40c17875168c",
+      "user_id": "bfa936c0-33a3-4190-bc44-6a5870832b8b",
+      "zone_name": "Zone B"
+    },
+    "lastStartedAt": "2026-04-27T06:39:18.610Z",
+    "lastFrameAt": "2026-04-27T07:24:17.555Z"
+  },
+  {
+    "id": "e4cd92d3-f726-4d04-8b11-a4e86128e1f3",
+    "userId": "bfa936c0-33a3-4190-bc44-6a5870832b8b",
+    "name": "campus",
+    "zoneName": "zoned",
+    "location": "class",
+    "streamUrl": "http://10.100.110.88:8080/video",
+    "sourceType": "http",
+    "status": "stopped",
+    "createdAt": "2026-04-27T06:05:47.166Z",
+    "metrics": {
+      "count": 0,
+      "current_count": 0,
+      "total_count": 0,
+      "people_count": 0,
+      "active_track_ids": [],
+      "detections": [],
+      "heatmap_points": [],
+      "line_crossing": {
+        "entry": 0,
+        "exit": 0
+      },
+      "zone_counts": {
+        "left": 0,
+        "center": 0,
+        "right": 0
+      },
+      "crowd_features": {
+        "density_score": 0,
+        "movement_score": 0,
+        "congestion_score": 0,
+        "hotspot_ratio": 0
+      },
+      "risk": "Low",
+      "updatedAt": "2026-04-27T07:32:14.971Z",
+      "alerts": [],
+      "risk_score": 0,
+      "processing_status": "idle",
+      "density_count": 0,
+      "base_count": 0,
+      "predicted_crowd": 0,
+      "smoothed_count": 0,
+      "final_count": 0,
+      "source": "python-service",
+      "frame_id": 787,
+      "density_map": [],
+      "density_context": {
+        "model": "CSRNet",
+        "enabled": false,
+        "used_density": false,
+        "track_count": 0
+      },
+      "temporal_context": {
+        "model": "ConvLSTM",
+        "enabled": false,
+        "sample_count": 8
+      },
+      "updated_at": "2026-04-27T07:32:14.301816+00:00",
+      "camera_id": "e4cd92d3-f726-4d04-8b11-a4e86128e1f3",
+      "user_id": "bfa936c0-33a3-4190-bc44-6a5870832b8b",
+      "zone_name": "zoned",
+      "fallback_reason": "AI service request failed with status 404"
+    },
+    "lastStartedAt": "2026-04-27T07:26:11.405Z",
+    "lastFrameAt": "2026-04-27T07:32:14.971Z"
+  }
+]

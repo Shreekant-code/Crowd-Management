@@ -1,0 +1,14 @@
+{
+  "watch": ["src"],
+  "ext": "js,json",
+  "ignore": [
+    "data/*.json",
+    "uploads/**",
+    "processed/**",
+    "tmp-ffmpeg-check/**",
+    "../frontend/.next/**",
+    "../frontend/node_modules/**",
+    "../python-service/**"
+  ],
+  "delay": "250"
+}
