@@ -4,6 +4,20 @@ import {
   startFileAnalysis,
 } from "../services/aiPredictionService.js";
 
+function isLiveSourceType(sourceType = "") {
+  return [
+    "rtsp",
+    "http",
+    "public",
+    "webcam",
+    "hls",
+    "mjpeg",
+    "usb",
+    "ipcam",
+    "file",
+  ].includes(String(sourceType || "").toLowerCase());
+}
+
 function deriveRisk(count) {
   if (count >= 180) return "Critical";
   if (count >= 130) return "High";
@@ -144,7 +158,7 @@ async function mockPredict(options = {}) {
     }
   }
 
-  if (options.sourceType === "rtsp") {
+  if (isLiveSourceType(options.sourceType)) {
     try {
       const latest = await getLatestStreamAnalysis({
         cameraId: options.cameraId,

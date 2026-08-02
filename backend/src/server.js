@@ -8,6 +8,7 @@ import workerManager from "./services/cameraWorkerManager.js";
 import cameraRepository from "./data/cameraRepository.js";
 
 const server = http.createServer(app);
+const MAX_PORT_ATTEMPTS = 5;
 
 const io = new Server(server, {
   cors: {
@@ -37,20 +38,53 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
-  socket.join(`user:${socket.platformUser.userId}`);
+  socket.join(`user:${socket.platformUser.id}`);
   socket.emit("connected", { id: socket.id, connectedAt: new Date().toISOString() });
 });
 
-server.listen(port, () => {
-  console.log(`Backend listening on http://localhost:${port}`);
-});
+function shutdown(code = 0) {
+  try {
+    workerManager.shutdown();
+  } finally {
+    process.exit(code);
+  }
+}
+
+function listenOnPort(targetPort, attempt = 0) {
+  process.env.PORT = String(targetPort);
+
+  const onError = (error) => {
+    server.off("error", onError);
+
+    if (error?.code === "EADDRINUSE" && attempt + 1 < MAX_PORT_ATTEMPTS) {
+      const nextPort = targetPort + 1;
+      console.warn(`Port ${targetPort} is busy, trying ${nextPort}...`);
+      listenOnPort(nextPort, attempt + 1);
+      return;
+    }
+
+    if (error?.code === "EADDRINUSE") {
+      console.error(`No free port found starting from ${targetPort}. Stop the existing backend process and try again.`);
+      shutdown(1);
+      return;
+    }
+
+    console.error("Backend server error:", error);
+    shutdown(1);
+  };
+
+  server.once("error", onError);
+  server.listen(targetPort, () => {
+    console.log(`Backend listening on http://localhost:${targetPort}`);
+  });
+}
+
+listenOnPort(port);
 
 process.on("SIGINT", () => {
-  workerManager.shutdown();
-  process.exit(0);
+  shutdown(0);
 });
 
 process.on("SIGTERM", () => {
-  workerManager.shutdown();
-  process.exit(0);
+  shutdown(0);
 });

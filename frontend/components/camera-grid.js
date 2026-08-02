@@ -5,9 +5,22 @@ import { changeCameraState, deleteCamera } from "@/lib/api";
 import { CameraFeed } from "@/components/camera-feed";
 import { riskClass } from "@/lib/risk";
 
-export function CameraGrid({ cameras = [], onCameraChanged }) {
+export function CameraGrid({ cameras = [], onCameraChanged, onCameraLiveUpdate }) {
   function getLiveCount(camera) {
     return camera.metrics?.current_count ?? camera.metrics?.count ?? camera.metrics?.people_count ?? 0;
+  }
+
+  function getRiskBar(camera) {
+    if (camera.metrics?.risk === "Critical") {
+      return "from-red-500 to-orange-400";
+    }
+    if (camera.metrics?.risk === "High") {
+      return "from-orange-500 to-amber-400";
+    }
+    if (camera.metrics?.risk === "Medium") {
+      return "from-amber-400 to-yellow-300";
+    }
+    return "from-emerald-400 to-teal-400";
   }
 
   async function handleAction(id, action) {
@@ -20,7 +33,11 @@ export function CameraGrid({ cameras = [], onCameraChanged }) {
         return;
       }
 
-      await changeCameraState(id, action);
+      const result = await changeCameraState(id, action);
+      if (result?.camera && onCameraChanged) {
+        onCameraChanged(result.camera);
+        return;
+      }
       if (onCameraChanged) {
         await onCameraChanged();
       }
@@ -38,15 +55,28 @@ export function CameraGrid({ cameras = [], onCameraChanged }) {
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+    <div className="grid gap-6 xl:grid-cols-3 xl:auto-rows-fr">
       {cameras.map((camera) => (
-        <article key={camera.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          <div className={`h-2 bg-gradient-to-r ${camera.metrics?.risk === "Critical" ? "from-red-500 to-orange-400" : camera.metrics?.risk === "High" ? "from-orange-500 to-amber-400" : camera.metrics?.risk === "Medium" ? "from-amber-400 to-yellow-300" : "from-emerald-400 to-teal-400"}`} />
-          <div className="space-y-5 p-5">
+        <article key={camera.id} className="flex h-full min-h-[40rem] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div className={`h-2 bg-gradient-to-r ${getRiskBar(camera)}`} />
+          <div className="flex h-full flex-col space-y-5 p-5">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-lg font-semibold text-slate-950">{camera.zoneName}</p>
                 <p className="text-sm text-slate-500">{camera.name}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    {camera.sourceType || "source"}
+                  </span>
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    {camera.status}
+                  </span>
+                  {Array.isArray(camera.metrics?.alerts) && camera.metrics.alerts.length ? (
+                    <span className="rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-red-600">
+                      {camera.metrics.alerts.length} Alerts
+                    </span>
+                  ) : null}
+                </div>
               </div>
               <span className={`${riskClass(camera.metrics?.risk)} rounded-full`}>
                 {camera.metrics?.risk || "Low"}
@@ -58,17 +88,62 @@ export function CameraGrid({ cameras = [], onCameraChanged }) {
                 <p className="text-xs uppercase tracking-[0.18em] text-white/55">Zone Feed</p>
                 <p className="text-xs text-white/55">{camera.status}</p>
               </div>
-              <CameraFeed camera={camera} />
+              <CameraFeed camera={camera} compact onLiveMetricsChange={onCameraLiveUpdate} />
             </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Live Crowd Count</p>
-                <p className="mt-2 text-2xl font-semibold text-slate-950">{getLiveCount(camera)}</p>
+            <div className="grid flex-1 gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.9fr)]">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Local Analytics</p>
+                    <p className="mt-2 text-sm text-slate-900">Live overlay count with the most important summary values.</p>
+                  </div>
+                  <div className="rounded-2xl bg-white px-4 py-3 text-right">
+                    <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Count</p>
+                    <span className="text-2xl font-semibold text-slate-950">{getLiveCount(camera)}</span>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl bg-white p-4">
+                    <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Current</p>
+                    <p className="mt-2 text-xl font-semibold text-slate-950">{camera.metrics?.current_count ?? camera.metrics?.count ?? camera.metrics?.people_count ?? 0}</p>
+                  </div>
+                  <div className="rounded-2xl bg-white p-4">
+                    <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Total</p>
+                    <p className="mt-2 text-xl font-semibold text-slate-950">{camera.metrics?.total_count ?? 0}</p>
+                  </div>
+                  <div className="rounded-2xl bg-white p-4">
+                    <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Prediction</p>
+                    <p className="mt-2 text-xl font-semibold text-slate-950">{camera.metrics?.prediction_10min_count ?? camera.metrics?.predicted_crowd ?? getLiveCount(camera)}</p>
+                  </div>
+                  <div className="rounded-2xl bg-white p-4">
+                    <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Risk</p>
+                    <p className="mt-2 text-xl font-semibold text-slate-950">{camera.metrics?.risk || "Low"}</p>
+                  </div>
+                </div>
               </div>
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Location</p>
-                <p className="mt-2 text-sm font-medium text-slate-900">{camera.location}</p>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Zone Summary</p>
+                <div className="mt-3 space-y-2 text-sm text-slate-700">
+                  <div className="flex items-center justify-between">
+                    <span>Left</span>
+                    <span className="font-semibold text-slate-950">{camera.metrics?.zone_counts?.left ?? 0}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Center</span>
+                    <span className="font-semibold text-slate-950">{camera.metrics?.zone_counts?.center ?? 0}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Right</span>
+                    <span className="font-semibold text-slate-950">{camera.metrics?.zone_counts?.right ?? 0}</span>
+                  </div>
+                </div>
+                <div className="mt-4 border-t border-slate-200 pt-4">
+                  <div className="flex items-center justify-between text-sm text-slate-700">
+                    <span>Health</span>
+                    <span className="font-semibold text-slate-950">{camera.metrics?.camera_health || "good"}</span>
+                  </div>
+                </div>
               </div>
             </div>
 

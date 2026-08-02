@@ -1,9 +1,13 @@
-from dataclasses import dataclass
 from typing import Dict, List
 
 import numpy as np
 
-from utils.config import TRACK_MIN_HITS
+from utils.config import STREAM_TARGET_FPS
+
+try:
+    import supervision as sv
+except Exception:  # pragma: no cover - fallback path when supervision is unavailable
+    sv = None
 
 
 def compute_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:
@@ -27,29 +31,106 @@ def compute_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:
     return intersection / union
 
 
-@dataclass
-class TrackState:
-    track_id: int
-    bbox_xyxy: np.ndarray
-    hits: int = 1
-    misses: int = 0
-    confidence: float = 0.0
-
-
 class PersonTracker:
-    def __init__(self, max_age: int = 12, min_hits: int = TRACK_MIN_HITS, iou_threshold: float = 0.3) -> None:
-        self.max_age = max_age
-        self.min_hits = min_hits
+    def __init__(self, iou_threshold: float = 0.3) -> None:
         self.iou_threshold = iou_threshold
-        self.smoothing = 0.65
         self.next_track_id = 1
-        self.tracks: List[TrackState] = []
+        self.tracks: List[Dict[str, np.ndarray | int | float]] = []
+        self.bytetrack = (
+            sv.ByteTrack(
+                track_activation_threshold=0.25,
+                lost_track_buffer=max(int(round(STREAM_TARGET_FPS * 2)), 30),
+                minimum_matching_threshold=0.75,
+                frame_rate=max(int(round(STREAM_TARGET_FPS)), 15),
+                minimum_consecutive_frames=1,
+            )
+            if sv is not None
+            else None
+        )
+
+    def reset(self) -> None:
+        self.next_track_id = 1
+        self.tracks = []
+        if sv is not None:
+            self.bytetrack = sv.ByteTrack(
+                track_activation_threshold=0.25,
+                lost_track_buffer=max(int(round(STREAM_TARGET_FPS * 2)), 30),
+                minimum_matching_threshold=0.75,
+                frame_rate=max(int(round(STREAM_TARGET_FPS)), 15),
+                minimum_consecutive_frames=1,
+            )
+        else:
+            self.bytetrack = None
 
     def update(self, detections: List[Dict[str, float]]) -> List[Dict[str, int]]:
+        if self.bytetrack is not None:
+            try:
+                return self._update_bytetrack(detections)
+            except Exception:
+                # Fall back to the lightweight tracker if ByteTrack fails at runtime.
+                self.bytetrack = None
+
+        return self._update_fallback(detections)
+
+    def _update_bytetrack(self, detections: List[Dict[str, float]]) -> List[Dict[str, int]]:
+        if not detections:
+            empty_xyxy = np.empty((0, 4), dtype=np.float32)
+            empty_conf = np.empty((0,), dtype=np.float32)
+            tracked = self.bytetrack.update_with_detections(
+                sv.Detections(
+                    xyxy=empty_xyxy,
+                    confidence=empty_conf,
+                    class_id=np.empty((0,), dtype=np.int32),
+                )
+            )
+            return self._serialize_supervision(tracked)
+
+        xyxy = np.array([item["bbox_xyxy"] for item in detections], dtype=np.float32)
+        confidence = np.array([item["confidence"] for item in detections], dtype=np.float32)
+        class_id = np.zeros((len(detections),), dtype=np.int32)
+        tracked = self.bytetrack.update_with_detections(
+            sv.Detections(xyxy=xyxy, confidence=confidence, class_id=class_id)
+        )
+        return self._serialize_supervision(tracked)
+
+    def _serialize_supervision(self, tracked) -> List[Dict[str, int]]:
+        if tracked is None:
+            return []
+
+        xyxy = np.asarray(getattr(tracked, "xyxy", np.empty((0, 4))), dtype=np.float32)
+        tracker_ids = getattr(tracked, "tracker_id", None)
+        if tracker_ids is None:
+            return []
+
+        ids = np.asarray(tracker_ids)
+        items: List[Dict[str, int]] = []
+        for box, tracker_id in zip(xyxy, ids):
+            if tracker_id is None:
+                continue
+
+            x1, y1, x2, y2 = [int(round(value)) for value in box.tolist()]
+            x1 = max(x1, 0)
+            y1 = max(y1, 0)
+            x2 = max(x2, x1)
+            y2 = max(y2, y1)
+            items.append(
+                {
+                    "id": int(tracker_id),
+                    "bbox": [x1, y1, max(x2 - x1, 0), max(y2 - y1, 0)],
+                    "bbox_xyxy": [x1, y1, x2, y2],
+                    "center": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
+                }
+            )
+
+        items.sort(key=lambda item: item["id"])
+        print(f"[tracker] tracked_ids={[item['id'] for item in items]}")
+        return items
+
+    def _update_fallback(self, detections: List[Dict[str, float]]) -> List[Dict[str, int]]:
         if not detections:
             for track in self.tracks:
-                track.misses += 1
-            self.tracks = [track for track in self.tracks if track.misses <= self.max_age]
+                track["misses"] = int(track.get("misses", 0)) + 1
+            self.tracks = [track for track in self.tracks if int(track.get("misses", 0)) <= 12]
             return []
 
         detection_boxes = np.array([item["bbox_xyxy"] for item in detections], dtype=np.float32)
@@ -61,8 +142,9 @@ class PersonTracker:
 
         candidate_pairs: List[tuple[float, int, int]] = []
         for track_index, track in enumerate(self.tracks):
+            box = np.asarray(track["bbox_xyxy"], dtype=np.float32)
             for detection_index, detection_box in enumerate(detection_boxes):
-                iou = compute_iou(track.bbox_xyxy, detection_box)
+                iou = compute_iou(box, detection_box)
                 if iou >= self.iou_threshold:
                     candidate_pairs.append((iou, track_index, detection_index))
 
@@ -76,45 +158,38 @@ class PersonTracker:
 
         for track_index, detection_index in matches:
             track = self.tracks[track_index]
-            detected_box = detection_boxes[detection_index]
-            track.bbox_xyxy = (
-                (1.0 - self.smoothing) * track.bbox_xyxy
-                + self.smoothing * detected_box
-            ).astype(np.float32)
-            track.hits += 1
-            track.misses = 0
-            track.confidence = float(detection_scores[detection_index])
+            track["bbox_xyxy"] = detection_boxes[detection_index].copy()
+            track["misses"] = 0
+            track["confidence"] = float(detection_scores[detection_index])
 
         for track_index in unmatched_tracks:
-            self.tracks[track_index].misses += 1
+            self.tracks[track_index]["misses"] = int(self.tracks[track_index].get("misses", 0)) + 1
 
         for detection_index in unmatched_detections:
             self.tracks.append(
-                TrackState(
-                    track_id=self.next_track_id,
-                    bbox_xyxy=detection_boxes[detection_index].copy(),
-                    hits=1,
-                    misses=0,
-                    confidence=float(detection_scores[detection_index]),
-                )
+                {
+                    "track_id": self.next_track_id,
+                    "bbox_xyxy": detection_boxes[detection_index].copy(),
+                    "misses": 0,
+                    "confidence": float(detection_scores[detection_index]),
+                }
             )
             self.next_track_id += 1
 
-        self.tracks = [track for track in self.tracks if track.misses <= self.max_age]
+        self.tracks = [track for track in self.tracks if int(track.get("misses", 0)) <= 12]
 
         items: List[Dict[str, int]] = []
         for track in self.tracks:
-            if track.misses > 0 or track.hits < self.min_hits:
+            if int(track.get("misses", 0)) > 0:
                 continue
-
-            x1, y1, x2, y2 = [int(round(value)) for value in track.bbox_xyxy.tolist()]
+            x1, y1, x2, y2 = [int(round(value)) for value in np.asarray(track["bbox_xyxy"]).tolist()]
             x1 = max(x1, 0)
             y1 = max(y1, 0)
             x2 = max(x2, x1)
             y2 = max(y2, y1)
             items.append(
                 {
-                    "id": int(track.track_id),
+                    "id": int(track["track_id"]),
                     "bbox": [x1, y1, max(x2 - x1, 0), max(y2 - y1, 0)],
                     "bbox_xyxy": [x1, y1, x2, y2],
                     "center": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
@@ -122,4 +197,5 @@ class PersonTracker:
             )
 
         items.sort(key=lambda item: item["id"])
+        print(f"[tracker] tracked_ids={[item['id'] for item in items]}")
         return items

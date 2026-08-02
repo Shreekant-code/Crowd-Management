@@ -30,7 +30,7 @@ uvicorn main:app --host 0.0.0.0 --port 8001
 ## Environment
 
 - `YOLO_MODEL=yolov8n.pt`
-- `YOLO_CONFIDENCE=0.35`
+- `YOLO_CONFIDENCE=0.20`
 - `FRAME_SKIP=4`
 - `AI_MAX_ACTIVE_JOBS=2`
 - `OVERCROWD_THRESHOLD=25`

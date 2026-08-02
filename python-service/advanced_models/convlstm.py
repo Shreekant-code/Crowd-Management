@@ -2,7 +2,7 @@ from typing import Any, Dict, Sequence
 
 import numpy as np
 
-from advanced_models.model_loader import get_torch, load_pickle, load_torch_module
+from advanced_models.model_loader import get_torch, get_torch_device, load_pickle, load_torch_module
 from utils.config import (
     TEMPORAL_BLEND_WEIGHT,
     TEMPORAL_MIN_SEQUENCE_LENGTH,
@@ -13,6 +13,7 @@ from utils.config import (
 class ConvLSTMPredictor:
     def __init__(self) -> None:
         self.torch = get_torch()
+        self.device = get_torch_device()
         self.model, self.model_error = load_torch_module(__file__, "lstm_final.pth")
         self.scaler, self.scaler_error = load_pickle(__file__, "lstm_scaler.pkl")
         self.enabled = self.torch is not None and self.model is not None
@@ -61,7 +62,7 @@ class ConvLSTMPredictor:
         try:
             values = np.array(window, dtype=np.float32).reshape(-1, 1)
             scaled = self._transform(values).astype(np.float32)
-            tensor = self.torch.from_numpy(scaled.reshape(1, len(window), 1))
+            tensor = self.torch.from_numpy(scaled.reshape(1, len(window), 1)).to(self.device)
 
             with self.torch.no_grad():
                 prediction = self.model(tensor)

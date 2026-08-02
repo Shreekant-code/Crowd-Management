@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import io
+import tempfile
 import pickle
 import zipfile
 from pathlib import Path
@@ -14,6 +14,20 @@ def get_torch():
         return torch
     except Exception:
         return None
+
+
+def get_torch_device() -> str:
+    torch = get_torch()
+    if torch is None:
+        return "cpu"
+
+    try:
+        if torch.cuda.is_available():
+            return "cuda:0"
+    except Exception:
+        pass
+
+    return "cpu"
 
 
 def resolve_artifact_path(current_file: str, artifact_name: str) -> Path:
@@ -30,53 +44,64 @@ def resolve_artifact_path(current_file: str, artifact_name: str) -> Path:
     return preferred
 
 
-def _zip_directory(directory: Path) -> io.BytesIO:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+def _zip_directory(directory: Path) -> Path:
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    temp_file.close()
+    archive_path = Path(temp_file.name)
+
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for file_path in directory.rglob("*"):
             if file_path.is_file():
                 archive.write(file_path, file_path.relative_to(directory).as_posix())
-    buffer.seek(0)
-    return buffer
+
+    return archive_path
 
 
 def load_torch_module(current_file: str, artifact_name: str) -> tuple[Any, str | None]:
     torch = get_torch()
     if torch is None:
         return None, "torch_unavailable"
+    device = get_torch_device()
 
     artifact_path = resolve_artifact_path(current_file, artifact_name)
     if not artifact_path.exists():
         return None, f"missing:{artifact_path.name}"
 
-    sources: list[Any] = []
+    sources: list[tuple[Any, Path | None]] = []
     if artifact_path.is_dir():
-        sources.append(_zip_directory(artifact_path))
+        archive_path = _zip_directory(artifact_path)
+        sources.append((str(archive_path), archive_path))
     else:
-        sources.append(str(artifact_path))
+        sources.append((str(artifact_path), None))
 
     last_error = "unknown_load_failure"
-    for source in sources:
-        for loader_name in ("jit", "load"):
-            try:
-                if hasattr(source, "seek"):
-                    source.seek(0)
+    for source, cleanup_path in sources:
+        try:
+            for loader_name in ("jit", "load"):
+                try:
+                    if hasattr(source, "seek"):
+                        source.seek(0)
 
-                if loader_name == "jit":
-                    model = torch.jit.load(source, map_location="cpu")
-                else:
-                    model = torch.load(source, map_location="cpu", weights_only=False)
+                    if loader_name == "jit":
+                        model = torch.jit.load(source, map_location=device)
+                    else:
+                        model = torch.load(source, map_location=device, weights_only=False)
 
-                if isinstance(model, dict):
-                    model = model.get("model") or model.get("module") or model
+                    if isinstance(model, dict):
+                        model = model.get("model") or model.get("module") or model
 
-                if hasattr(model, "eval"):
-                    model.eval()
+                    if hasattr(model, "to"):
+                        model = model.to(device)
+                    if hasattr(model, "eval"):
+                        model.eval()
 
-                if callable(model):
-                    return model, None
-            except Exception as error:
-                last_error = str(error)
+                    if callable(model):
+                        return model, None
+                except Exception as error:
+                    last_error = str(error)
+        finally:
+            if cleanup_path is not None:
+                cleanup_path.unlink(missing_ok=True)
 
     return None, last_error
 

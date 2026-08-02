@@ -1,8 +1,9 @@
 import {
   aiCallbackSecret,
-  aiResultCallbackUrl,
   aiStreamFreshnessMs,
   aiStreamStartCooldownMs,
+  aiLiveStreamTimeoutMs,
+  resolveAiResultCallbackUrl,
 } from "../config/env.js";
 import { requestJson } from "./aiHttpClient.js";
 import {
@@ -26,7 +27,7 @@ async function startFileAnalysis({ filePath, userId, fileId, originalName, clean
       file_id: fileId,
       original_name: originalName,
       callback: {
-        url: aiResultCallbackUrl,
+        url: resolveAiResultCallbackUrl(Number(process.env.PORT || 4000)),
         headers: {
           "x-ai-callback-secret": aiCallbackSecret,
         },
@@ -58,6 +59,8 @@ async function ensureStreamStarted({ cameraId, streamUrl, userId, zoneName }) {
   try {
     await requestJson("/streams/start", {
       method: "POST",
+      timeoutMs: aiLiveStreamTimeoutMs,
+      retries: 0,
       body: {
         camera_id: cameraId,
         stream_url: streamUrl,
@@ -75,7 +78,10 @@ async function getLatestStreamAnalysis({ cameraId, streamUrl, userId, zoneName }
   await ensureStreamStarted({ cameraId, streamUrl, userId, zoneName });
 
   try {
-    const response = await requestJson(`/streams/${cameraId}/latest`);
+    const response = await requestJson(`/streams/${cameraId}/latest`, {
+      timeoutMs: aiLiveStreamTimeoutMs,
+      retries: 0,
+    });
     if (!response?.result) {
       return null;
     }

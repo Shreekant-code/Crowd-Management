@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 from advanced_models.convlstm import ConvLSTMPredictor
 from advanced_models.csrnet import CSRNetDensityEstimator
 from utils.config import (
+    ACTIVE_TRACK_PERSISTENCE_FRAMES,
     CONGESTION_ALERT_THRESHOLD,
     DENSITY_ALERT_THRESHOLD,
     DENSE_COUNT_THRESHOLD,
@@ -34,16 +35,30 @@ def derive_risk(count: int) -> str:
 
 
 class AnalyticsEngine:
-    def __init__(self) -> None:
+    def __init__(self, enable_advanced: bool | None = None) -> None:
+        advanced_enabled = ENABLE_ADVANCED_MODELS if enable_advanced is None else enable_advanced
         self.heatmap_history: deque[Tuple[int, int]] = deque(maxlen=HEATMAP_HISTORY)
         self.count_history: deque[float] = deque(maxlen=max(TEMPORAL_SEQUENCE_LENGTH, 5))
         self.last_positions: Dict[int, Tuple[int, int]] = {}
-        self.unique_track_ids: set[int] = set()
+        self.last_sides: Dict[int, str] = {}
+        self.counted_track_ids: set[int] = set()
+        self.track_ttl: Dict[int, int] = {}
         self.last_count = 0
-        self.line_crossing = {"entry": 0, "exit": 0}
         self.movement_history: deque[float] = deque(maxlen=MOVEMENT_HISTORY)
-        self.temporal_model = ConvLSTMPredictor() if ENABLE_ADVANCED_MODELS else None
-        self.density_model = CSRNetDensityEstimator() if ENABLE_ADVANCED_MODELS else None
+        self.speed_history: deque[float] = deque(maxlen=MOVEMENT_HISTORY)
+        self.temporal_model = ConvLSTMPredictor() if advanced_enabled else None
+        self.density_model = CSRNetDensityEstimator() if advanced_enabled else None
+
+    def reset(self) -> None:
+        self.heatmap_history.clear()
+        self.count_history.clear()
+        self.last_positions.clear()
+        self.last_sides.clear()
+        self.counted_track_ids.clear()
+        self.track_ttl.clear()
+        self.last_count = 0
+        self.movement_history.clear()
+        self.speed_history.clear()
 
     def update(
         self,
@@ -53,7 +68,6 @@ class AnalyticsEngine:
         frame_id: int | None = None,
     ) -> Dict[str, Any]:
         height, width = int(frame_shape[0]), int(frame_shape[1])
-        line_y = max(height // 2, 1)
         frame_area = max(height * width, 1)
         diagonal = max(sqrt((width ** 2) + (height ** 2)), 1.0)
         zone_counts = {"left": 0, "center": 0, "right": 0}
@@ -61,11 +75,25 @@ class AnalyticsEngine:
         fresh_centers: List[Tuple[int, int]] = []
         movement_samples: List[float] = []
         total_bbox_area = 0
+        seen_track_ids: set[int] = set()
+        line_crossing = {"entry": 0, "exit": 0}
+        midline_x = width / 2.0
 
         for item in tracks:
-            x, y, w, h = item["bbox"]
-            cx, cy = item["center"]
-            track_id = int(item["id"])
+            try:
+                x, y, w, h = item["bbox"]
+                cx, cy = item["center"]
+                track_id = int(item["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+
+            if track_id in seen_track_ids:
+                continue
+            seen_track_ids.add(track_id)
+
+            if w <= 0 or h <= 0:
+                continue
+
             detections.append({"id": track_id, "bbox": [x, y, w, h]})
             fresh_centers.append((cx, cy))
             total_bbox_area += max(w, 0) * max(h, 0)
@@ -81,22 +109,46 @@ class AnalyticsEngine:
             if previous is not None:
                 delta_x = cx - previous[0]
                 delta_y = cy - previous[1]
-                movement_samples.append(sqrt((delta_x ** 2) + (delta_y ** 2)) / diagonal)
-                previous_y = previous[1]
-                if previous_y < line_y <= cy:
-                    self.line_crossing["entry"] += 1
-                elif previous_y > line_y >= cy:
-                    self.line_crossing["exit"] += 1
+                movement = sqrt((delta_x ** 2) + (delta_y ** 2)) / diagonal
+                movement_samples.append(movement)
+                self.speed_history.append(movement)
+
+                previous_side = self.last_sides.get(track_id)
+                current_side = "left" if cx < midline_x else "right"
+                if previous_side and previous_side != current_side:
+                    if previous_side == "left" and current_side == "right":
+                        line_crossing["entry"] += 1
+                    elif previous_side == "right" and current_side == "left":
+                        line_crossing["exit"] += 1
+                self.last_sides[track_id] = current_side
+            else:
+                self.last_sides[track_id] = "left" if cx < midline_x else "right"
 
             self.last_positions[track_id] = (cx, cy)
 
         self.heatmap_history.extend(fresh_centers)
 
-        active_track_ids = sorted({int(item["id"]) for item in tracks})
+        current_detected_ids = sorted(seen_track_ids)
+        for track_id in current_detected_ids:
+            self.track_ttl[track_id] = max(ACTIVE_TRACK_PERSISTENCE_FRAMES, 1)
+            self.counted_track_ids.add(track_id)
+
+        stale_track_ids = []
+        for track_id in list(self.track_ttl.keys()):
+            if track_id in current_detected_ids:
+                continue
+            next_ttl = int(self.track_ttl[track_id]) - 1
+            if next_ttl <= 0:
+                stale_track_ids.append(track_id)
+            else:
+                self.track_ttl[track_id] = next_ttl
+
+        for track_id in stale_track_ids:
+            self.track_ttl.pop(track_id, None)
+
+        active_track_ids = sorted(track_id for track_id, ttl in self.track_ttl.items() if ttl > 0)
         current_count = len(active_track_ids)
-        for track_id in active_track_ids:
-            self.unique_track_ids.add(track_id)
-        total_count = len(self.unique_track_ids)
+        total_count = len(self.counted_track_ids)
 
         density_result: Dict[str, Any] = {
             "density_count": current_count,
@@ -142,11 +194,26 @@ class AnalyticsEngine:
             if self.movement_history
             else 0.0
         )
+        smoothed_speed = (
+            sum(self.speed_history) / len(self.speed_history)
+            if self.speed_history
+            else 0.0
+        )
         congestion_score = min(
             1.0,
             (current_count / max(OVERCROWD_THRESHOLD, 1)) * 0.45
             + density_score * 0.35
             + smoothed_movement * 1.2 * 0.20,
+        )
+        flow_estimation = round(max((line_crossing["entry"] + line_crossing["exit"]) + (smoothed_movement * current_count), 0.0), 4)
+        danger_score = round(
+            min(
+                1.0,
+                (current_count / max(OVERCROWD_THRESHOLD, 1)) * 0.55
+                + density_score * 0.25
+                + smoothed_movement * 0.20,
+            ),
+            4,
         )
         crowd_features = {
             "density_score": round(density_score, 4),
@@ -172,16 +239,25 @@ class AnalyticsEngine:
             "heatmap_points": [{"x": x, "y": y} for x, y in list(self.heatmap_history)],
             "alerts": alerts,
             "zone_counts": zone_counts,
-            "line_crossing": dict(self.line_crossing),
+            "line_crossing": line_crossing,
+            "flow_estimation": flow_estimation,
+            "speed_estimation": round(smoothed_speed * 30.0, 4),
             "count": current_count,
             "risk": risk,
             "crowd_features": crowd_features,
             "risk_score": round(self._derive_risk_score(current_count, crowd_features), 4),
+            "danger_score": danger_score,
             "density_map": density_result.get("density_map", []),
             "density_context": density_result.get("density_context", {}),
             "temporal_context": temporal_result.get("temporal_context", {}),
             "updated_at": utc_now(),
         }
+
+        print(
+            f"[analytics] frame={frame_id} shape=({height},{width}) "
+            f"detections={len(detections)} tracked={len(current_detected_ids)} "
+            f"current_count={current_count} total_count={total_count}"
+        )
 
         self.last_count = current_count
         return result
@@ -202,7 +278,9 @@ class AnalyticsEngine:
             "heatmap_points": [],
             "alerts": [],
             "zone_counts": {"left": 0, "center": 0, "right": 0},
-            "line_crossing": dict(self.line_crossing),
+            "line_crossing": {"entry": 0, "exit": 0},
+            "flow_estimation": 0.0,
+            "speed_estimation": 0.0,
             "count": 0,
             "risk": "Low",
             "density_map": [],
@@ -224,6 +302,7 @@ class AnalyticsEngine:
                 "hotspot_ratio": 0.0,
             },
             "risk_score": 0.0,
+            "danger_score": 0.0,
             "updated_at": utc_now(),
         }
 
@@ -239,6 +318,8 @@ class AnalyticsEngine:
             "alerts": [],
             "zone_counts": {"left": 0, "center": 0, "right": 0},
             "count": 0,
+            "flow_estimation": 0.0,
+            "speed_estimation": 0.0,
             "density_count": 0,
             "base_count": 0,
             "predicted_crowd": 0.0,
@@ -256,6 +337,7 @@ class AnalyticsEngine:
                 "enabled": False,
                 "sample_count": 0,
             },
+            "line_crossing": {"entry": 0, "exit": 0},
             "risk": "Low",
             "crowd_features": {
                 "density_score": 0.0,
@@ -264,6 +346,7 @@ class AnalyticsEngine:
                 "hotspot_ratio": 0.0,
             },
             "risk_score": 0.0,
+            "danger_score": 0.0,
             "processing_status": "stale",
             "updated_at": utc_now(),
         }

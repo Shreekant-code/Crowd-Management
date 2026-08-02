@@ -3,12 +3,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LoaderCircle, VideoOff } from "lucide-react";
 
-function getFeedSource(camera, retrySeed) {
+const STREAM_STALE_MS = 12000;
+const STREAM_RETRY_MS = 8000;
+
+function getFeedSource(camera, retrySeed, streamMode) {
   if (!camera?.id) {
     return null;
   }
 
-  return `/api/stream/${camera.id}?retry=${retrySeed}`;
+  if (streamMode === "ai") {
+    return `/api/stream/${camera.id}?retry=${retrySeed}`;
+  }
+
+  return `/api/platform/cameras/${camera.id}/preview?retry=${retrySeed}&mode=${streamMode}`;
 }
 
 function getStreamStatus(camera, metrics, imageErrored, isLoaded) {
@@ -23,7 +30,7 @@ function getStreamStatus(camera, metrics, imageErrored, isLoaded) {
   const updatedAt = metrics?.updatedAt || camera.lastFrameAt || camera.lastStartedAt;
   if (updatedAt) {
     const ageMs = Date.now() - new Date(updatedAt).getTime();
-    if (ageMs > 12000) {
+    if (ageMs > STREAM_STALE_MS) {
       return "reconnecting";
     }
   }
@@ -67,7 +74,53 @@ function getRiskAccent(risk) {
   };
 }
 
-export function CameraFeed({ camera }) {
+function getDisplayRect(image, width, height) {
+  const naturalWidth = image.naturalWidth || 0;
+  const naturalHeight = image.naturalHeight || 0;
+  if (!naturalWidth || !naturalHeight) {
+    return {
+      scale: 1,
+      displayWidth: width,
+      displayHeight: height,
+      offsetX: 0,
+      offsetY: 0,
+    };
+  }
+
+  const ratioX = width / naturalWidth;
+  const ratioY = height / naturalHeight;
+  const scale = Math.min(ratioX, ratioY);
+  const displayWidth = naturalWidth * scale;
+  const displayHeight = naturalHeight * scale;
+  return {
+    scale,
+    displayWidth,
+    displayHeight,
+    offsetX: Math.max((width - displayWidth) / 2, 0),
+    offsetY: Math.max((height - displayHeight) / 2, 0),
+  };
+}
+
+function getDetectionBox(detection = {}) {
+  if (Array.isArray(detection.bbox) && detection.bbox.length >= 4) {
+    const [x = 0, y = 0, w = 0, h = 0] = detection.bbox;
+    return [x, y, w, h];
+  }
+
+  if (Array.isArray(detection.bbox_xyxy) && detection.bbox_xyxy.length >= 4) {
+    const [x1 = 0, y1 = 0, x2 = 0, y2 = 0] = detection.bbox_xyxy;
+    return [x1, y1, Math.max(x2 - x1, 0), Math.max(y2 - y1, 0)];
+  }
+
+  if (Array.isArray(detection.bbox_xywh) && detection.bbox_xywh.length >= 4) {
+    const [x = 0, y = 0, w = 0, h = 0] = detection.bbox_xywh;
+    return [x, y, w, h];
+  }
+
+  return [0, 0, 0, 0];
+}
+
+export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
   const imageRef = useRef(null);
   const canvasRef = useRef(null);
   const [liveMetrics, setLiveMetrics] = useState(camera.metrics || {});
@@ -77,30 +130,32 @@ export function CameraFeed({ camera }) {
   const [isLoaded, setIsLoaded] = useState(false);
   const [imageErrored, setImageErrored] = useState(false);
   const [mediaSize, setMediaSize] = useState({ width: 960, height: 540 });
+  const [streamStartedAt, setStreamStartedAt] = useState(() => Date.now());
+  const [streamMode, setStreamMode] = useState("ai");
+  const [streamResolutionStatus, setStreamResolutionStatus] = useState("direct");
   const streamStatus = getStreamStatus(camera, liveMetrics, imageErrored, isLoaded);
   const feedSource = useMemo(
-    () => getFeedSource(camera, retrySeed),
-    [camera, retrySeed]
+    () => getFeedSource(camera, retrySeed, streamMode),
+    [camera, retrySeed, streamMode]
   );
-  const currentCount =
-    liveMetrics?.current_count ??
-    liveMetrics?.count ??
-    liveMetrics?.people_count ??
-    0;
-  const totalCount = liveMetrics?.total_count ?? currentCount;
-  const densityCount = liveMetrics?.density_count ?? currentCount;
-  const finalCount =
-    liveMetrics?.final_count ??
-    liveMetrics?.smoothed_count ??
-    currentCount;
-  const risk = liveMetrics?.risk || "Low";
-  const densityScore = liveMetrics?.crowd_features?.density_score ?? 0;
-  const movementScore = liveMetrics?.crowd_features?.movement_score ?? 0;
-  const congestionScore = liveMetrics?.crowd_features?.congestion_score ?? 0;
-  const entryCount = liveMetrics?.line_crossing?.entry ?? 0;
-  const exitCount = liveMetrics?.line_crossing?.exit ?? 0;
-  const zoneCounts = liveMetrics?.zone_counts || {};
-  const riskAccent = getRiskAccent(risk);
+  const riskAccent = getRiskAccent(liveMetrics?.risk || "Low");
+  const sourceBadge = useMemo(() => {
+    if (camera.status !== "running") {
+      return { label: "Stopped", tone: "bg-slate-100 text-slate-500 border-slate-200" };
+    }
+
+    if (camera.sourceType === "public") {
+      if (streamResolutionStatus === "fallback_preview") {
+        return { label: "Fallback preview", tone: "bg-amber-100 text-amber-700 border-amber-200" };
+      }
+      if (streamResolutionStatus === "unresolved") {
+        return { label: "Unresolved", tone: "bg-red-100 text-red-700 border-red-200" };
+      }
+      return { label: "Public stream", tone: "bg-sky-100 text-sky-700 border-sky-200" };
+    }
+
+    return { label: "Direct stream", tone: "bg-teal-100 text-teal-700 border-teal-200" };
+  }, [camera.sourceType, camera.status, streamResolutionStatus]);
 
   useEffect(() => {
     const mergedMetrics = camera.metrics || {};
@@ -112,6 +167,9 @@ export function CameraFeed({ camera }) {
     setRetrySeed(0);
     setIsLoaded(false);
     setImageErrored(false);
+    setStreamStartedAt(Date.now());
+    setStreamMode("ai");
+    setStreamResolutionStatus("direct");
   }, [camera.id]);
 
   useEffect(() => {
@@ -140,6 +198,18 @@ export function CameraFeed({ camera }) {
         const nextMetrics = payload?.metrics || {};
         setLiveMetrics(nextMetrics);
         metricsRef.current = nextMetrics;
+        if (payload?.stream_resolution_status) {
+          setStreamResolutionStatus(payload.stream_resolution_status);
+        } else if (nextMetrics?.stream_resolution_status) {
+          setStreamResolutionStatus(nextMetrics.stream_resolution_status);
+        } else if (camera.sourceType === "public") {
+          setStreamResolutionStatus(streamMode === "preview" ? "fallback_preview" : "direct");
+        } else {
+          setStreamResolutionStatus("direct");
+        }
+        if (onLiveMetricsChange) {
+          onLiveMetricsChange(camera.id, nextMetrics, payload?.updatedAt);
+        }
       } catch (_error) {
         // Keep last known metrics when polling briefly fails.
       }
@@ -148,13 +218,13 @@ export function CameraFeed({ camera }) {
     void refreshStats();
     const interval = setInterval(() => {
       void refreshStats();
-    }, 1000);
+    }, 400);
 
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [camera.id, camera.status]);
+  }, [camera.id, camera.status, camera.sourceType, onLiveMetricsChange, streamMode]);
 
   useEffect(() => {
     if (camera.status !== "running") {
@@ -168,13 +238,94 @@ export function CameraFeed({ camera }) {
     }
 
     const timeout = setTimeout(() => {
-      setRetrySeed((current) => current + 1);
+      if (streamMode === "ai") {
+        setStreamMode("preview");
+        if (camera.sourceType === "public") {
+          setStreamResolutionStatus("fallback_preview");
+        }
+        setRetrySeed(0);
+      } else {
+        setRetrySeed((current) => current + 1);
+      }
       setImageErrored(false);
       setIsLoaded(false);
     }, 1500);
 
     return () => clearTimeout(timeout);
-  }, [camera.status, imageErrored]);
+  }, [camera.status, imageErrored, streamMode]);
+
+  useEffect(() => {
+    if (camera.status !== "running" || isLoaded) {
+      return undefined;
+    }
+
+    const timeout = setTimeout(() => {
+      if (streamMode === "ai") {
+        setStreamMode("preview");
+        if (camera.sourceType === "public") {
+          setStreamResolutionStatus("fallback_preview");
+        }
+        setRetrySeed(0);
+      } else {
+        setRetrySeed((current) => current + 1);
+      }
+      setImageErrored(false);
+      setIsLoaded(false);
+      setStreamStartedAt(Date.now());
+    }, STREAM_RETRY_MS);
+
+    return () => clearTimeout(timeout);
+  }, [camera.status, isLoaded, retrySeed, streamMode]);
+
+  useEffect(() => {
+    if (camera.status !== "running" || isLoaded || !feedSource) {
+      return undefined;
+    }
+
+    const interval = setInterval(() => {
+      const image = imageRef.current;
+      if (!image) {
+        return;
+      }
+
+      const naturalWidth = image.naturalWidth || 0;
+      const naturalHeight = image.naturalHeight || 0;
+      if (naturalWidth > 0 && naturalHeight > 0) {
+        setMediaSize({
+          width: naturalWidth,
+          height: naturalHeight,
+        });
+        setIsLoaded(true);
+        setImageErrored(false);
+      }
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, [camera.status, feedSource, isLoaded]);
+
+  useEffect(() => {
+    const updatedAt = liveMetrics?.updatedAt || camera.lastFrameAt || camera.lastStartedAt;
+    if (!updatedAt || isLoaded || camera.status !== "running") {
+      return;
+    }
+
+    const ageMs = Date.now() - new Date(updatedAt).getTime();
+    const loadingMs = Date.now() - streamStartedAt;
+    if (ageMs < STREAM_STALE_MS / 2 && loadingMs > STREAM_RETRY_MS) {
+      if (streamMode === "ai") {
+        setStreamMode("preview");
+        if (camera.sourceType === "public") {
+          setStreamResolutionStatus("fallback_preview");
+        }
+        setRetrySeed(0);
+      } else {
+        setRetrySeed((current) => current + 1);
+      }
+      setImageErrored(false);
+      setIsLoaded(false);
+      setStreamStartedAt(Date.now());
+    }
+  }, [camera.lastFrameAt, camera.lastStartedAt, camera.status, isLoaded, liveMetrics?.updatedAt, streamMode, streamStartedAt]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -188,8 +339,16 @@ export function CameraFeed({ camera }) {
       return;
     }
     let animationFrameId = 0;
+    let lastDrawAt = 0;
 
     const drawOverlay = () => {
+      const now = performance.now();
+      if (now - lastDrawAt < 100) {
+        animationFrameId = window.requestAnimationFrame(drawOverlay);
+        return;
+      }
+      lastDrawAt = now;
+
       const rect = image.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
       const width = Math.max(Math.round(rect.width), 1);
@@ -208,16 +367,19 @@ export function CameraFeed({ camera }) {
       const metrics = metricsRef.current || {};
       const sourceWidth = mediaSizeRef.current.width || width;
       const sourceHeight = mediaSizeRef.current.height || height;
-      const scaleX = width / sourceWidth;
-      const scaleY = height / sourceHeight;
+      const display = getDisplayRect(image, width, height);
+      const scaleX = display.displayWidth / sourceWidth;
+      const scaleY = display.displayHeight / sourceHeight;
+      const offsetX = display.offsetX;
+      const offsetY = display.offsetY;
       const heatmapPoints = Array.isArray(metrics.heatmap_points) ? metrics.heatmap_points : [];
-      const recentHeatmapPoints = heatmapPoints.slice(-220);
+      const recentHeatmapPoints = heatmapPoints.slice(-120);
 
       for (let index = 0; index < recentHeatmapPoints.length; index += 1) {
         const point = recentHeatmapPoints[index];
         const recency = (index + 1) / Math.max(recentHeatmapPoints.length, 1);
-        const x = (point.x ?? 0) * scaleX;
-        const y = (point.y ?? 0) * scaleY;
+        const x = offsetX + (point.x ?? 0) * scaleX;
+        const y = offsetY + (point.y ?? 0) * scaleY;
         const radius = 10 + recency * 24;
         const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
         gradient.addColorStop(0, `rgba(239, 68, 68, ${0.22 + recency * 0.28})`);
@@ -231,30 +393,14 @@ export function CameraFeed({ camera }) {
       }
 
       const detections = Array.isArray(metrics.detections) ? metrics.detections : [];
-      const lineY = height / 2;
       const accent = getRiskAccent(metrics.risk || "Low");
-
-      context.save();
-      context.setLineDash([8, 8]);
-      context.strokeStyle = accent.line;
-      context.lineWidth = 1.5;
-      context.beginPath();
-      context.moveTo(12, lineY);
-      context.lineTo(width - 12, lineY);
-      context.stroke();
-      context.restore();
-
-      context.fillStyle = "rgba(15, 23, 42, 0.74)";
-      context.fillRect(width - 120, Math.max(lineY - 12, 10), 108, 24);
-      context.fillStyle = "#e2e8f0";
-      context.fillText("Crossing Line", width - 108, Math.max(lineY + 4, 24));
 
       context.lineWidth = 2;
       context.font = "12px sans-serif";
       for (const detection of detections) {
-        const [x = 0, y = 0, w = 0, h = 0] = detection.bbox || [];
-        const left = x * scaleX;
-        const top = y * scaleY;
+        const [x = 0, y = 0, w = 0, h = 0] = getDetectionBox(detection);
+        const left = offsetX + x * scaleX;
+        const top = offsetY + y * scaleY;
         const boxWidth = w * scaleX;
         const boxHeight = h * scaleY;
 
@@ -275,7 +421,7 @@ export function CameraFeed({ camera }) {
 
     animationFrameId = window.requestAnimationFrame(drawOverlay);
     return () => window.cancelAnimationFrame(animationFrameId);
-  }, [isLoaded, mediaSize, retrySeed]);
+  }, [isLoaded, mediaSize, retrySeed, streamMode]);
 
   useEffect(() => {
     function handleResize() {
@@ -297,16 +443,21 @@ export function CameraFeed({ camera }) {
 
   return (
     <div className="mt-4 space-y-3">
-      <div className="relative h-44 overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,rgba(72,208,193,0.18),transparent_35%),rgba(255,255,255,0.04)]">
+      <div className={`relative overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,rgba(72,208,193,0.18),transparent_35%),rgba(255,255,255,0.04)] ${compact ? "aspect-video" : "h-[38rem]"}`}>
         {camera.status === "running" && feedSource ? (
           <>
             <img
+              key={feedSource}
               ref={imageRef}
               alt={`${camera.zoneName} live feed`}
-              className="h-full w-full object-cover"
+              className={`h-full w-full bg-slate-950 ${compact ? "object-cover" : "object-contain"}`}
               onError={() => {
                 setImageErrored(true);
                 setIsLoaded(false);
+                setStreamStartedAt(Date.now());
+                if (camera.sourceType === "public") {
+                  setStreamResolutionStatus("unresolved");
+                }
               }}
               onLoad={(event) => {
                 const target = event.currentTarget;
@@ -316,14 +467,26 @@ export function CameraFeed({ camera }) {
                 });
                 setIsLoaded(true);
                 setImageErrored(false);
+                setStreamStartedAt(Date.now());
+                if (camera.sourceType === "public") {
+                  setStreamResolutionStatus(streamMode === "preview" ? "fallback_preview" : "direct");
+                }
               }}
               src={feedSource}
             />
             {isLoaded ? (
+              <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
+            ) : null}
+            {isLoaded ? (
               <>
-                <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
                 <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-full bg-slate-950/70 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-white">
-                  Live Analytics
+                  {streamMode === "ai" ? "Live" : "Preview"}
+                </div>
+                <div className={`pointer-events-none absolute left-3 top-3 z-10 rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${sourceBadge.tone}`}>
+                  {sourceBadge.label}
+                </div>
+                <div className="pointer-events-none absolute left-3 top-11 z-10 rounded-full bg-black/65 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-white">
+                  Count {Number(liveMetrics?.current_count ?? liveMetrics?.count ?? liveMetrics?.people_count ?? 0)}
                 </div>
               </>
             ) : null}
@@ -332,10 +495,10 @@ export function CameraFeed({ camera }) {
                 <div className="text-center text-white">
                   <LoaderCircle className="mx-auto h-7 w-7 animate-spin text-teal-300" />
                   <p className="mt-2 text-sm font-medium">
-                    {streamStatus === "reconnecting" ? "Reconnecting..." : "Connecting camera feed..."}
+                    {streamStatus === "reconnecting" ? "Reconnecting..." : "Connecting..."}
                   </p>
-                  <p className="mt-1 text-xs text-white/65">
-                    Trying synchronized AI stream
+                  <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-white/55">
+                    {sourceBadge.label}
                   </p>
                 </div>
               </div>
@@ -346,56 +509,14 @@ export function CameraFeed({ camera }) {
             <div className="text-center text-white">
               <VideoOff className="mx-auto h-8 w-8 text-white/70" />
               <p className="mt-2 text-sm text-white/70">Start camera to view live preview</p>
+              <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-white/55">
+                {sourceBadge.label}
+              </p>
             </div>
           </div>
         )}
       </div>
 
-      <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-white/92">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            Current Count {currentCount}
-          </span>
-          <span className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            Total Count {totalCount}
-          </span>
-          <span className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            Density Count {densityCount}
-          </span>
-          <span className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            Final Count {finalCount}
-          </span>
-          <span className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            Risk {risk}
-          </span>
-          <span className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            Density {densityScore.toFixed(2)}
-          </span>
-          <span className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            Movement {movementScore.toFixed(2)}
-          </span>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-white/78">
-          <span>Congestion {congestionScore.toFixed(2)}</span>
-          <span>Entry {entryCount}</span>
-          <span>Exit {exitCount}</span>
-          <span>Frame {liveMetrics?.frame_id ?? "-"}</span>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
-          <span className="rounded-full bg-white/10 px-2 py-0.5">Left {zoneCounts.left ?? 0}</span>
-          <span className="rounded-full bg-white/10 px-2 py-0.5">Center {zoneCounts.center ?? 0}</span>
-          <span className="rounded-full bg-white/10 px-2 py-0.5">Right {zoneCounts.right ?? 0}</span>
-        </div>
-
-        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-red-500"
-            style={{ width: `${Math.min(100, Math.max(6, congestionScore * 100))}%` }}
-          />
-        </div>
-      </div>
     </div>
   );
 }

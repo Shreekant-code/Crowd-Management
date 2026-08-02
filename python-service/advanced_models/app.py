@@ -1,369 +1,369 @@
 from __future__ import annotations
 
-from collections import deque
+import threading
+import time
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Deque, Dict, Iterable
+from typing import Any, Dict, Iterable, Optional
 
 import cv2
-import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from advanced_models.convlstm import ConvLSTMPredictor
-from advanced_models.csrnet import CSRNetDensityEstimator
-from utils.config import CSRNET_INPUT_HEIGHT, CSRNET_INPUT_WIDTH
+from utils.config import (
+    LIVE_SESSION_IDLE_SECONDS,
+    LIVE_STREAM_JPEG_QUALITY,
+    STREAM_RECONNECT_DELAY_SECONDS,
+    STREAM_TARGET_FPS,
+)
+from utils.crowd_runtime import CrowdRuntime, get_shared_csrnet
+from utils.stream_loader import LatestFrameCapture, detect_stream_type
 
-try:
-    from advanced_models.csrnet_runtime import run_csrnet  # type: ignore
-except Exception:  # pragma: no cover - optional integration point
-    run_csrnet = None
-
-
-app = FastAPI(title="Advanced Crowd Analytics", version="1.0.0")
-temporal_predictor = ConvLSTMPredictor()
-density_estimator = CSRNetDensityEstimator()
-csrnet_loaded = callable(run_csrnet) or bool(getattr(density_estimator, "enabled", False))
-lstm_loaded = bool(getattr(temporal_predictor, "enabled", False))
-
-COUNT_HISTORY_LENGTH = 10
-TEMPORAL_WEIGHT = 0.3
-DEBUG_FRAME_OUTPUT = Path(__file__).resolve().parent / "live_debug_frame.jpg"
-MODEL_FRAME_SKIP = 1
-
-current_source: str | None = None
-current_count = 0
-total_count = 0
-last_count = 0
-live_frame_id = 0
-last_density_map: np.ndarray | None = None
-last_smoothed_count = 0
-last_updated_at: str | None = None
+app = FastAPI(title="Advanced Crowd Analytics", version="2.0.0")
+sessions_lock = threading.Lock()
+sessions: Dict[str, "LiveSession"] = {}
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _open_capture(source: str) -> cv2.VideoCapture:
-    if not source:
-        raise RuntimeError("Video source is required")
+class LiveSession:
+    def __init__(self, camera_id: str, stream_url: str) -> None:
+        self.camera_id = camera_id
+        self.stream_url = stream_url
+        self.runtime = CrowdRuntime()
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        self.status = "warming_up"
+        self.latest_result: Optional[Dict[str, Any]] = None
+        self.latest_jpeg: Optional[bytes] = None
+        self.last_processed_at = 0.0
+        self.last_access_at = time.time()
+        self.viewer_count = 0
+        self.thread = threading.Thread(target=self._run, daemon=True)
 
-    capture_source: Any = 0 if source == "0" else source
-    capture = (
-        cv2.VideoCapture(capture_source, cv2.CAP_FFMPEG)
-        if isinstance(capture_source, str) and capture_source.startswith("rtsp://")
-        else cv2.VideoCapture(capture_source)
-    )
-    capture.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-    if not capture.isOpened():
-        capture.release()
-        raise RuntimeError(f"Unable to open video source: {source}")
-    return capture
+    def start(self) -> None:
+        self.thread.start()
 
+    def stop(self) -> None:
+        self.stop_event.set()
 
-def _is_loopable_file_source(source: str) -> bool:
-    normalized = (source or "").strip().lower()
-    if not normalized or normalized == "0":
-        return False
-    if normalized.startswith("rtsp://") or normalized.startswith("http://") or normalized.startswith("https://"):
-        return False
-    return True
+    def touch(self) -> None:
+        with self.lock:
+            self.last_access_at = time.time()
 
+    def add_viewer(self) -> None:
+        with self.lock:
+            self.viewer_count += 1
+            self.last_access_at = time.time()
 
-def _coerce_density_map(raw_map: Any, frame_shape: tuple[int, int, int]) -> np.ndarray:
-    density_map = np.asarray(raw_map, dtype=np.float32)
-    density_map = np.squeeze(density_map)
-    if density_map.ndim == 0:
-        density_map = np.zeros((frame_shape[0], frame_shape[1]), dtype=np.float32)
-    elif density_map.ndim == 1:
-        density_map = density_map.reshape(1, -1)
+    def remove_viewer(self) -> None:
+        with self.lock:
+            self.viewer_count = max(self.viewer_count - 1, 0)
+            self.last_access_at = time.time()
 
-    if density_map.shape[:2] != frame_shape[:2]:
-        density_map = cv2.resize(density_map, (frame_shape[1], frame_shape[0]))
+    def snapshot(self) -> Optional[Dict[str, Any]]:
+        with self.lock:
+            self.last_access_at = time.time()
+            if self.latest_result is None:
+                return None
+            return {
+                key: value
+                for key, value in self.latest_result.items()
+                if not key.startswith("_")
+            }
 
-    return np.maximum(density_map, 0.0)
+    def latest_frame(self) -> Optional[bytes]:
+        with self.lock:
+            self.last_access_at = time.time()
+            return self.latest_jpeg
 
+    def idle_for_too_long(self) -> bool:
+        with self.lock:
+            return self.viewer_count == 0 and (time.time() - self.last_access_at) > LIVE_SESSION_IDLE_SECONDS
 
-def _blank_density_map(frame_shape: tuple[int, int, int]) -> np.ndarray:
-    return np.zeros((frame_shape[0], frame_shape[1]), dtype=np.float32)
+    def _run(self) -> None:
+        stream_type = detect_stream_type(self.stream_url)
+        reader = LatestFrameCapture(self.stream_url)
+        frame_interval = 1.0 / max(STREAM_TARGET_FPS, 1.0)
+        frame_id = 0
+        last_processed_at = 0.0
 
-
-def _validate_csrnet_result(result: Any, frame_shape: tuple[int, int, int]) -> Dict[str, Any]:
-    if isinstance(result, tuple) and len(result) >= 2:
-        current_count, density_map = result[0], result[1]
-        return {
-            "current_count": max(int(round(float(current_count))), 0),
-            "density_map": _coerce_density_map(density_map, frame_shape),
-        }
-
-    if isinstance(result, dict):
-        density_map = _coerce_density_map(result.get("density_map", []), frame_shape)
-        count = result.get("count", result.get("current_count", float(density_map.sum())))
-        return {
-            "current_count": max(int(round(float(count))), 0),
-            "density_map": density_map,
-        }
-
-    raise ValueError("run_csrnet must return (count, density_map) or a dict with count/current_count and density_map")
-
-
-def _run_primary_csrnet(frame: np.ndarray) -> Dict[str, Any]:
-    if callable(run_csrnet):
+        reader.start()
         try:
-            print("[DEBUG] CSRNet branch: run_csrnet")
-            print("[RUNNING CSRNET]")
-            result = run_csrnet(frame)
-            if isinstance(result, tuple) and len(result) >= 2:
-                current_count, density_map = result[0], result[1]
-                print("[COUNT]", float(current_count))
-                return {
-                    "current_count": max(int(round(float(current_count))), 0),
-                    "density_map": None if density_map is None else _coerce_density_map(density_map, frame.shape),
-                }
+            while not self.stop_event.is_set():
+                ok, frame = reader.read(timeout=STREAM_RECONNECT_DELAY_SECONDS)
+                if not ok or frame is None:
+                    self.status = "reconnecting"
+                    time.sleep(0.05)
+                    continue
 
-            current_count = result
-            print("[COUNT]", float(current_count))
-            return {
-                "current_count": max(int(round(float(current_count))), 0),
-                "density_map": None,
-            }
-        except Exception as error:
-            print(f"[live] run_csrnet failed validation/runtime error: {error}")
-            return {
-                "current_count": 0,
-                "density_map": None,
-            }
+                now = time.perf_counter()
+                if now - last_processed_at < frame_interval:
+                    time.sleep(0.001)
+                    continue
 
-    if getattr(density_estimator, "enabled", False):
-        try:
-            print("[DEBUG] CSRNet branch: direct_model")
-            model = density_estimator.model
-            print("[DEBUG] model type:", type(model))
-            try:
-                first_parameter = next(model.parameters())
-                print("[DEBUG] first parameter shape:", tuple(first_parameter.shape))
-            except Exception as parameter_error:
-                print(f"[DEBUG] unable to inspect model parameters: {parameter_error}")
+                frame_id += 1
+                last_processed_at = now
+                result = self.runtime.process_frame(frame, frame_id=frame_id)
+                result.update(
+                    {
+                        "camera_id": self.camera_id,
+                        "stream_url": self.stream_url,
+                        "updated_at": utc_now(),
+                        "stream_type": stream_type,
+                    }
+                )
 
-            print("[DEBUG] live frame shape:", tuple(frame.shape))
-            print("[DEBUG] using CSRNet input size:", (CSRNET_INPUT_WIDTH, CSRNET_INPUT_HEIGHT))
-            tensor, _ = density_estimator._prepare_tensor(frame)
-            print("[DEBUG] tensor shape:", tuple(tensor.shape))
-            print("[RUNNING CSRNET]")
-            with density_estimator.torch.no_grad():
-                output = model(tensor)
+                output_frame = result.get("_output_frame", frame)
+                encoded, buffer = cv2.imencode(
+                    ".jpg",
+                    output_frame,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), LIVE_STREAM_JPEG_QUALITY],
+                )
+                if not encoded:
+                    continue
 
-            density_map = density_estimator._extract_density_array(output)
-            count = int(round(float(density_map.sum())))
-            print("[DEBUG] density min/max:", float(density_map.min()), float(density_map.max()))
-            print("[DEBUG] density sum:", float(density_map.sum()))
-            print("[COUNT]", float(density_map.sum()))
-            return {
-                "current_count": max(count, 0),
-                "density_map": _coerce_density_map(density_map, frame.shape),
-            }
-        except Exception as error:
-            print(f"[live] direct CSRNet fallback failed: {error}")
-
-    return {
-        "current_count": 0,
-        "density_map": None,
-    }
+                with self.lock:
+                    self.latest_result = result
+                    self.latest_jpeg = buffer.tobytes()
+                    self.last_processed_at = time.time()
+                    self.last_access_at = time.time()
+                    self.status = "running"
+        finally:
+            reader.stop()
+            self.runtime.shutdown()
+            with sessions_lock:
+                current = sessions.get(self.camera_id)
+                if current is self:
+                    sessions.pop(self.camera_id, None)
 
 
-def _update_live_counts(next_count: int) -> None:
-    global current_count, total_count, last_count, last_updated_at
+def _cleanup_idle_sessions() -> None:
+    stale_camera_ids = []
+    with sessions_lock:
+        for camera_id, session in sessions.items():
+            if session.idle_for_too_long():
+                stale_camera_ids.append(camera_id)
 
-    current_count = max(int(next_count), 0)
-    if current_count > last_count:
-        total_count += current_count - last_count
-    last_count = current_count
-    last_updated_at = utc_now()
-
-
-def _predict_smoothed_count(count_history: Deque[float], current_count: int) -> int:
-    if not lstm_loaded or len(count_history) < 5:
-        return int(current_count)
-
-    try:
-        prediction = temporal_predictor.predict(list(count_history), float(current_count))
-        predicted_count = float(prediction.get("predicted_crowd", current_count))
-        final_count = ((1.0 - TEMPORAL_WEIGHT) * float(current_count)) + (TEMPORAL_WEIGHT * predicted_count)
-        return max(int(round(final_count)), 0)
-    except Exception as error:
-        print(f"[live] ConvLSTM smoothing failed: {error}")
-        return int(current_count)
+        for camera_id in stale_camera_ids:
+            session = sessions.pop(camera_id, None)
+            if session is not None:
+                session.stop()
 
 
-def _build_heatmap_overlay(frame: np.ndarray, density_map: np.ndarray) -> np.ndarray:
-    heat = cv2.resize(density_map, (frame.shape[1], frame.shape[0]))
-    heat = cv2.normalize(heat, None, 0, 255, cv2.NORM_MINMAX).astype("uint8")
-    heat = cv2.applyColorMap(heat, cv2.COLORMAP_JET)
-    return cv2.addWeighted(frame, 0.6, heat, 0.4, 0)
+def _ensure_session(camera_id: str, source: str) -> LiveSession:
+    if not source.strip():
+        raise HTTPException(status_code=400, detail="source query parameter is required")
+
+    _cleanup_idle_sessions()
+
+    with sessions_lock:
+        existing = sessions.get(camera_id)
+        if existing is not None:
+            if existing.stream_url == source:
+                existing.touch()
+                return existing
+            existing.stop()
+            sessions.pop(camera_id, None)
+
+        session = LiveSession(camera_id=camera_id, stream_url=source)
+        sessions[camera_id] = session
+
+    session.start()
+    return session
 
 
-def _annotate_frame(frame: np.ndarray, current_count: int, smoothed_count: int) -> np.ndarray:
-    cv2.putText(
-        frame,
-        f"Current: {current_count}",
-        (20, 40),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1,
-        (0, 255, 0),
-        2,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        frame,
-        f"Total: {total_count}",
-        (20, 80),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        frame,
-        f"Smoothed: {smoothed_count}",
-        (20, 116),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA,
-    )
-    return frame
+def _camera_id_from_params(source: str, camera_id: Optional[str]) -> str:
+    normalized_camera_id = (camera_id or "").strip()
+    if normalized_camera_id:
+        return normalized_camera_id
+    return source.strip()
 
 
-def _generate_live_stream(source: str) -> Iterable[bytes]:
-    global current_source, current_count, total_count, last_count, live_frame_id, last_density_map, last_smoothed_count, last_updated_at
-
-    if current_source != source:
-        current_source = source
-        current_count = 0
-        total_count = 0
-        last_count = 0
-        live_frame_id = 0
-        last_density_map = None
-        last_smoothed_count = 0
-        last_updated_at = None
-
-    capture = _open_capture(source)
-    loop_file = _is_loopable_file_source(source)
-    count_history: Deque[float] = deque(maxlen=COUNT_HISTORY_LENGTH)
-    debug_frame_saved = False
-
+def _stream_generator(session: LiveSession) -> Iterable[bytes]:
+    session.add_viewer()
     try:
         while True:
-            ok, frame = capture.read()
-            if not ok:
-                if loop_file:
-                    capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    continue
+            if session.stop_event.is_set():
                 break
 
-            live_frame_id += 1
-            print("[FRAME RECEIVED]")
-            print(f"[FRAME] {live_frame_id}")
-
-            if not debug_frame_saved:
-                try:
-                    cv2.imwrite(str(DEBUG_FRAME_OUTPUT), frame)
-                    debug_frame_saved = True
-                    print(f"[DEBUG] saved live frame to: {DEBUG_FRAME_OUTPUT}")
-                except Exception as error:
-                    print(f"[DEBUG] failed to save live frame: {error}")
-
-            try:
-                if live_frame_id % MODEL_FRAME_SKIP == 0 or last_density_map is None:
-                    print("[MODEL] Running CSRNet")
-                    primary_result = _run_primary_csrnet(frame)
-                    _update_live_counts(int(primary_result["current_count"]))
-                    density_map = primary_result["density_map"]
-                    last_density_map = density_map
-                else:
-                    density_map = last_density_map
-            except Exception as error:
-                print(f"[live] frame processing failed at frame={live_frame_id}: {error}")
-                _update_live_counts(0)
-                density_map = last_density_map
-
-            print(f"[MODEL] Current Count: {current_count}")
-            print("LIVE COUNT:", current_count)
-
-            count_history.append(float(current_count))
-            smoothed_count = _predict_smoothed_count(count_history, current_count)
-            last_smoothed_count = smoothed_count
-
-            output_frame = frame
-            if density_map is not None:
-                output_frame = _build_heatmap_overlay(output_frame, density_map)
-
-            annotated = _annotate_frame(output_frame, current_count, smoothed_count)
-
-            encoded, buffer = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-            if not encoded:
+            frame = session.latest_frame()
+            if frame is None:
+                time.sleep(0.05)
                 continue
 
             yield (
                 b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
             )
+            time.sleep(1.0 / max(STREAM_TARGET_FPS, 1.0))
     finally:
-        capture.release()
+        session.remove_viewer()
 
 
 @app.get("/live")
-def live(source: str | None = Query(None, description="0 for webcam or RTSP/HTTP stream URL")) -> StreamingResponse:
+def live(
+    source: str | None = Query(None, description="RTSP/HTTP stream URL"),
+    camera_id: str | None = Query(None, description="Stable camera identifier"),
+) -> StreamingResponse:
     if source is None or not source.strip():
         raise HTTPException(status_code=400, detail="source query parameter is required")
 
-    try:
-        stream = _generate_live_stream(source.strip())
-        return StreamingResponse(
-            stream,
-            media_type="multipart/x-mixed-replace; boundary=frame",
-        )
-    except RuntimeError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+    session = _ensure_session(_camera_id_from_params(source, camera_id), source.strip())
+    return StreamingResponse(
+        _stream_generator(session),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@app.get("/camera/{camera_id}/live")
+def camera_live(camera_id: str, source: str | None = Query(None)) -> StreamingResponse:
+    if source is None or not source.strip():
+        raise HTTPException(status_code=400, detail="source query parameter is required")
+
+    session = _ensure_session(camera_id, source.strip())
+    return StreamingResponse(
+        _stream_generator(session),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@app.get("/stats")
+def stats(
+    source: str | None = Query(None),
+    camera_id: str | None = Query(None),
+) -> Dict[str, Any]:
+    if source is None or not source.strip():
+        raise HTTPException(status_code=400, detail="source query parameter is required")
+
+    session = _ensure_session(_camera_id_from_params(source, camera_id), source.strip())
+    snapshot = session.snapshot()
+    if snapshot is None:
+        return {
+            "camera_id": session.camera_id,
+            "count": 0,
+            "current_count": 0,
+            "mode": "YOLO",
+            "stream_url": session.stream_url,
+            "heatmap_active": False,
+            "fps": 0,
+            "status": session.status,
+            "updated_at": None,
+        }
+
+    return {
+        **snapshot,
+        "status": session.status,
+    }
+
+
+@app.get("/camera/{camera_id}/stats")
+def camera_stats(camera_id: str, source: str | None = Query(None)) -> Dict[str, Any]:
+    if source is None or not source.strip():
+        raise HTTPException(status_code=400, detail="source query parameter is required")
+
+    session = _ensure_session(camera_id, source.strip())
+    snapshot = session.snapshot()
+    if snapshot is None:
+        return {
+            "camera_id": camera_id,
+            "count": 0,
+            "current_count": 0,
+            "mode": "YOLO",
+            "stream_url": source.strip(),
+            "heatmap_active": False,
+            "fps": 0,
+            "status": session.status,
+            "updated_at": None,
+        }
+
+    return {
+        **snapshot,
+        "status": session.status,
+    }
+
+
+@app.get("/streams/{camera_id}/latest")
+def stream_latest(camera_id: str, source: str | None = Query(None)) -> Dict[str, Any]:
+    if source is None or not source.strip():
+        raise HTTPException(status_code=400, detail="source query parameter is required")
+
+    session = _ensure_session(_camera_id_from_params(source, camera_id), source.strip())
+    snapshot = session.snapshot()
+    if snapshot is None:
+        return {
+            "camera_id": camera_id,
+            "status": session.status,
+            "updated_at": None,
+            "result": None,
+        }
+
+    return {
+        "camera_id": camera_id,
+        "status": session.status,
+        "updated_at": snapshot.get("updated_at"),
+        "result": snapshot,
+    }
 
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
-    return {
-        "csrnet_loaded": csrnet_loaded,
-        "lstm_loaded": lstm_loaded,
-        "live_stream": "ready",
-    }
-
-
-@app.get("/stats")
-def stats(source: str | None = Query(None)) -> Dict[str, Any]:
-    normalized_source = source.strip() if isinstance(source, str) else None
-
-    if normalized_source is not None and current_source is not None and normalized_source != current_source:
-        return {
-            "current_count": 0,
-            "total_count": 0,
-            "density_count": 0,
-            "final_count": 0,
-            "risk": "Low",
-            "movement": 0.0,
-            "frame_id": 0,
-            "source": normalized_source,
-            "updated_at": last_updated_at,
+    with sessions_lock:
+        active_sessions = {
+            camera_id: {
+                "stream_url": session.stream_url,
+                "status": session.status,
+            }
+            for camera_id, session in sessions.items()
         }
 
     return {
-        "current_count": current_count,
-        "total_count": total_count,
-        "density_count": current_count,
-        "final_count": last_smoothed_count or current_count,
-        "risk": "Low",
-        "movement": 0.0,
-        "frame_id": live_frame_id,
-        "source": current_source,
-        "updated_at": last_updated_at,
+        "status": "ok",
+        "csrnet_loaded": bool(getattr(get_shared_csrnet(), "enabled", False)),
+        "active_sessions": active_sessions,
+        "timestamp": utc_now(),
+    }
+
+
+@app.get("/global")
+def global_summary() -> Dict[str, Any]:
+    with sessions_lock:
+        snapshots = []
+        for camera_id, session in sessions.items():
+            snapshot = session.snapshot()
+            if snapshot is None:
+                continue
+            snapshots.append(
+                {
+                    "camera_id": camera_id,
+                    "current_count": snapshot.get("current_count", 0),
+                    "predicted_count": snapshot.get("predicted_count", snapshot.get("predicted_crowd", 0)),
+                    "risk_level": snapshot.get("risk_level", "low"),
+                    "model_used": snapshot.get("model_used", snapshot.get("mode", "YOLO")),
+                }
+            )
+
+    if not snapshots:
+        return {
+            "most_crowded_camera": None,
+            "fastest_growing_camera": None,
+            "high_risk_cameras": [],
+            "cameras": [],
+            "updated_at": utc_now(),
+        }
+
+    most_crowded = max(snapshots, key=lambda item: item["current_count"])
+    fastest_growing = max(
+        snapshots,
+        key=lambda item: float(item["predicted_count"]) - float(item["current_count"]),
+    )
+    high_risk = [item for item in snapshots if item["risk_level"] == "high"]
+
+    return {
+        "most_crowded_camera": most_crowded,
+        "fastest_growing_camera": fastest_growing,
+        "high_risk_cameras": high_risk,
+        "cameras": snapshots,
+        "updated_at": utc_now(),
     }

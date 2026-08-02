@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 import cv2
 import numpy as np
 
-from advanced_models.model_loader import get_torch, load_torch_module
+from advanced_models.model_loader import get_torch, get_torch_device, load_torch_module
 from utils.config import (
     CSRNET_INPUT_HEIGHT,
     CSRNET_INPUT_WIDTH,
@@ -16,6 +16,7 @@ from utils.config import (
 class CSRNetDensityEstimator:
     def __init__(self) -> None:
         self.torch = get_torch()
+        self.device = get_torch_device()
         self.model, self.load_error = load_torch_module(__file__, "csrnet_final.pth")
         self.enabled = self.torch is not None and self.model is not None
 
@@ -36,8 +37,17 @@ class CSRNetDensityEstimator:
         resized = cv2.resize(frame, (CSRNET_INPUT_WIDTH, CSRNET_INPUT_HEIGHT))
         normalized = resized.astype(np.float32) / 255.0
         chw = np.transpose(normalized, (2, 0, 1))
-        tensor = self.torch.from_numpy(chw).unsqueeze(0)
+        tensor = self.torch.from_numpy(chw).unsqueeze(0).to(self.device)
         return tensor, frame.shape[:2]
+
+    @staticmethod
+    def _resize_density_map(density_array: np.ndarray, frame_width: int, frame_height: int) -> np.ndarray:
+        resized_density = cv2.resize(
+            density_array,
+            (frame_width, frame_height),
+            interpolation=cv2.INTER_CUBIC,
+        )
+        return np.maximum(resized_density, 0.0).astype(np.float32)
 
     @staticmethod
     def _extract_density_array(output: Any) -> np.ndarray:
@@ -53,12 +63,31 @@ class CSRNetDensityEstimator:
             array = array.reshape(1, -1)
         return np.maximum(array, 0.0)
 
+    def infer(self, frame: Any) -> Dict[str, Any]:
+        if frame is None:
+            raise ValueError("frame is required")
+        if not self.enabled:
+            raise RuntimeError(self.load_error or "csrnet_unavailable")
+
+        tensor, frame_shape = self._prepare_tensor(frame)
+        with self.torch.no_grad():
+            output = self.model(tensor)
+
+        density_array = self._extract_density_array(output)
+        frame_height, frame_width = frame_shape
+        resized_density = self._resize_density_map(density_array, frame_width, frame_height)
+        return {
+            "count": max(int(round(float(density_array.sum()))), 0),
+            "density_map": resized_density,
+            "input_size": [CSRNET_INPUT_WIDTH, CSRNET_INPUT_HEIGHT],
+        }
+
     def predict(self, frame: Any, tracks: List[Dict], current_count: int) -> Dict:
         default = self._build_default(tracks, current_count, used_density=False)
-        if frame is None or current_count <= 0:
+        if frame is None:
             return default
 
-        if current_count < DENSE_COUNT_THRESHOLD or not self.enabled:
+        if not self.enabled:
             return default
 
         try:
@@ -70,7 +99,7 @@ class CSRNetDensityEstimator:
             density_count = int(round(float(density_array.sum())))
 
             frame_height, frame_width = frame_shape
-            resized_density = cv2.resize(density_array, (frame_width, frame_height))
+            resized_density = self._resize_density_map(density_array, frame_width, frame_height)
             normalized_density = cv2.normalize(
                 resized_density,
                 None,
@@ -92,6 +121,7 @@ class CSRNetDensityEstimator:
                     "used_density": True,
                     "track_count": len(tracks),
                     "input_size": [CSRNET_INPUT_WIDTH, CSRNET_INPUT_HEIGHT],
+                    "frame_size": [frame_width, frame_height],
                     "map_size": [DENSITY_MAP_OUTPUT_WIDTH, DENSITY_MAP_OUTPUT_HEIGHT],
                     "load_error": self.load_error,
                 },

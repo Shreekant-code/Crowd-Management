@@ -23,12 +23,18 @@ export const pythonLiveServiceUrl =
   process.env.PYTHON_LIVE_SERVICE_URL || "http://127.0.0.1:8002";
 export const enablePythonLiveProxy =
   process.env.ENABLE_PYTHON_LIVE_PROXY !== "false";
+export const liveProxyTimeoutMs = Number(process.env.LIVE_PROXY_TIMEOUT_MS || 15000);
 export const aiRequestTimeoutMs = Number(process.env.AI_REQUEST_TIMEOUT_MS || 1500);
 export const aiRetryCount = Number(process.env.AI_RETRY_COUNT || 1);
 export const aiStreamStartCooldownMs = Number(process.env.AI_STREAM_START_COOLDOWN_MS || 10000);
 export const aiStreamFreshnessMs = Number(process.env.AI_STREAM_FRESHNESS_MS || 12000);
+export const aiLiveStreamTimeoutMs = Number(process.env.AI_LIVE_STREAM_TIMEOUT_MS || 8000);
 export const aiCallbackSecret =
   process.env.AI_CALLBACK_SECRET || "ai-callback-secret-change-me";
-export const aiResultCallbackUrl =
-  process.env.AI_RESULT_CALLBACK_URL || `http://127.0.0.1:${port}/internal/ai/upload-result`;
+export function resolveAiResultCallbackUrl(runtimePort = port) {
+  return process.env.AI_RESULT_CALLBACK_URL || `http://127.0.0.1:${runtimePort}/internal/ai/upload-result`;
+}
 export const aiStreamPollIntervalMs = Number(process.env.AI_STREAM_POLL_INTERVAL_MS || 750);
+export const previewStreamFps = Number(process.env.PREVIEW_STREAM_FPS || 10);
+export const previewStreamWidth = Number(process.env.PREVIEW_STREAM_WIDTH || 640);
+export const previewInputTimeoutMs = Number(process.env.PREVIEW_INPUT_TIMEOUT_MS || 3000);

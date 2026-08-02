@@ -26,4 +26,12 @@ function emitAlert(userId, alert) {
   }
 }
 
-export { registerSocket, getSocket, emitDashboard, emitCamera, emitAlert };
+function emitGlobal(userId, payload) {
+  if (io) {
+    io.to(`user:${userId}`).emit("global:update", payload);
+    io.to(`user:${userId}`).emit("global:prediction", payload?.globalPrediction || payload);
+    io.to(`user:${userId}`).emit("dashboard:summary", payload);
+  }
+}
+
+export { registerSocket, getSocket, emitDashboard, emitCamera, emitAlert, emitGlobal };

@@ -3,7 +3,9 @@ import cameraRepository from "../data/cameraRepository.js";
 import alertRepository from "../data/alertRepository.js";
 import { aiStreamPollIntervalMs } from "../config/env.js";
 import { mockPredict } from "../utils/mockPredict.js";
-import { emitAlert, emitCamera, emitDashboard } from "./socketHub.js";
+import { resolveSourceInput } from "../utils/sourceResolver.js";
+import { emitAlert, emitCamera, emitDashboard, emitGlobal } from "./socketHub.js";
+import { buildGlobalAnalytics } from "./globalAnalyticsEngine.js";
 import { stopStreamAnalysis } from "./aiPredictionService.js";
 
 function buildResetMetrics(previousMetrics = {}) {
@@ -25,8 +27,16 @@ function buildResetMetrics(previousMetrics = {}) {
       congestion_score: 0,
       hotspot_ratio: 0,
     },
+    prediction_10min_count: 0,
+    prediction_10min_risk: "LOW",
+    prediction_10min_label: "Prediction (10 min): LOW RISK",
+    prediction_horizon_minutes: 10,
     risk_score: 0,
     risk: "Low",
+    confidence: 0,
+    latency_ms: 0,
+    inference_ms: 0,
+    camera_health: "good",
     processing_status: "idle",
     updatedAt: new Date().toISOString(),
   };
@@ -36,10 +46,325 @@ class CameraWorkerManager {
   constructor() {
     this.workers = new Map();
     this.alertCache = new Map();
+    this.resolutionCache = new Map();
+  }
+
+  createWorkerState(camera) {
+    return {
+      cameraId: camera.id,
+      userId: camera.userId,
+      paused: false,
+      stopped: false,
+      busy: false,
+      timer: null,
+      lastFrameSignature: null,
+      lastResolvedStreamUrl: null,
+      lastResolvedAt: 0,
+      lastResolutionStatus: "idle",
+      consecutiveFailures: 0,
+      lastError: null,
+    };
+  }
+
+  getWorker(id) {
+    return this.workers.get(id) || null;
+  }
+
+  clearWorkerTimer(worker) {
+    if (worker?.timer) {
+      clearTimeout(worker.timer);
+      worker.timer = null;
+    }
+  }
+
+  getResolutionStatusLabel(camera, resolvedUrl) {
+    const sourceType = String(camera?.sourceType || "").toLowerCase();
+    if (sourceType === "public") {
+      return resolvedUrl && resolvedUrl !== camera.streamUrl ? "youtube_resolved" : "unresolved";
+    }
+
+    if (resolvedUrl && resolvedUrl !== camera.streamUrl) {
+      return "public_resolved";
+    }
+
+    return "resolved";
+  }
+
+  updateCameraResolutionStatus(camera, userId, status, extras = {}) {
+    const nextMetrics = {
+      ...(camera.metrics || {}),
+      stream_resolution_status: status,
+      stream_resolution_error: extras.error || null,
+      processing_status: extras.processing_status || camera.metrics?.processing_status || camera.status || "idle",
+      updatedAt: new Date().toISOString(),
+    };
+
+    camera.metrics = nextMetrics;
+    cameraRepository.save(camera);
+    emitCamera(userId, camera);
+    this.broadcastDashboard(userId);
+
+    const worker = this.getWorker(camera.id);
+    if (worker) {
+      worker.lastResolutionStatus = status;
+      worker.lastError = extras.error || null;
+      if (extras.resolvedUrl) {
+        worker.lastResolvedStreamUrl = extras.resolvedUrl;
+        worker.lastResolvedAt = Date.now();
+      }
+    }
+  }
+
+  warmupCameraSource(camera, userId) {
+    const normalizedType = String(camera.sourceType || "").toLowerCase();
+    if (!["public", "http", "hls", "mjpeg", "webcam"].includes(normalizedType)) {
+      return;
+    }
+
+    const worker = this.getWorker(camera.id);
+    if (worker?.lastResolutionStatus === "resolving") {
+      return;
+    }
+
+    if (worker) {
+      worker.lastResolutionStatus = "resolving";
+    }
+
+    this.updateCameraResolutionStatus(camera, userId, "connecting", {
+      processing_status: camera.status === "running" ? "warming_up" : "idle",
+    });
+
+    const cacheKey = `${normalizedType}:${camera.streamUrl}`;
+    const cachedPromise = this.resolutionCache.get(cacheKey);
+    if (cachedPromise) {
+      cachedPromise
+        .then((resolvedUrl) => {
+          const latestCamera = cameraRepository.getByUser(camera.id, userId);
+          if (!latestCamera || !resolvedUrl) {
+            return;
+          }
+          this.updateCameraResolutionStatus(latestCamera, userId, this.getResolutionStatusLabel(latestCamera, resolvedUrl), {
+            resolvedUrl,
+            processing_status: latestCamera.status === "running" ? "running" : "idle",
+          });
+        })
+        .catch((error) => {
+          const latestCamera = cameraRepository.getByUser(camera.id, userId);
+          if (!latestCamera) {
+            return;
+          }
+          this.updateCameraResolutionStatus(latestCamera, userId, "unresolved", {
+            error: error.message,
+            processing_status: latestCamera.status === "running" ? "warming_up" : "idle",
+          });
+        });
+      return;
+    }
+
+    const resolutionPromise = resolveSourceInput({
+      sourceUrl: camera.streamUrl,
+      sourceType: camera.sourceType,
+    });
+    this.resolutionCache.set(cacheKey, resolutionPromise);
+
+    resolutionPromise
+      .then((plan) => {
+        const latestCamera = cameraRepository.getByUser(camera.id, userId);
+        if (!latestCamera) {
+          return;
+        }
+        this.updateCameraResolutionStatus(latestCamera, userId, this.getResolutionStatusLabel(latestCamera, plan.playableUrl || latestCamera.streamUrl), {
+          resolvedUrl: plan.playableUrl || latestCamera.streamUrl,
+          error: plan.resolutionError || null,
+          processing_status: latestCamera.status === "running" ? "running" : "idle",
+        });
+      })
+      .catch((error) => {
+        const latestCamera = cameraRepository.getByUser(camera.id, userId);
+        if (!latestCamera) {
+          return;
+        }
+        this.updateCameraResolutionStatus(latestCamera, userId, "unresolved", {
+          error: error.message,
+          processing_status: latestCamera.status === "running" ? "warming_up" : "idle",
+        });
+      })
+      .finally(() => {
+        this.resolutionCache.delete(cacheKey);
+      });
+  }
+
+  scheduleNextRun(id, delay = aiStreamPollIntervalMs) {
+    const worker = this.getWorker(id);
+    if (!worker || worker.stopped || worker.paused) {
+      return;
+    }
+
+    this.clearWorkerTimer(worker);
+    worker.timer = setTimeout(() => {
+      void this.runWorkerTick(id);
+    }, Math.max(delay, 50));
+  }
+
+  async resolveCameraStream(camera, worker) {
+    const needsRefresh =
+      !worker.lastResolvedStreamUrl
+      || worker.lastResolvedAt <= 0
+      || worker.lastResolvedAt + 5 * 60 * 1000 < Date.now()
+      || worker.lastResolvedSourceUrl !== camera.streamUrl
+      || worker.lastResolvedSourceType !== camera.sourceType;
+
+    if (!needsRefresh) {
+      return worker.lastResolvedStreamUrl;
+    }
+
+    try {
+      const plan = await resolveSourceInput({
+        sourceUrl: camera.streamUrl,
+        sourceType: camera.sourceType,
+      });
+
+      const resolved = plan.playableUrl || camera.streamUrl;
+      worker.lastResolvedStreamUrl = resolved;
+      worker.lastResolvedAt = Date.now();
+      worker.lastResolvedSourceUrl = camera.streamUrl;
+      worker.lastResolvedSourceType = camera.sourceType;
+      worker.lastError = plan.resolutionError || null;
+      worker.consecutiveFailures = plan.isValid ? 0 : worker.consecutiveFailures + 1;
+      return resolved;
+    } catch (error) {
+      worker.lastError = error.message;
+      worker.consecutiveFailures += 1;
+      console.error(`[camera-worker] stream resolution failed for ${camera.id}`);
+      console.error(error.message);
+      const normalizedType = String(camera.sourceType || "").toLowerCase();
+      if (["public", "hls", "mjpeg"].includes(normalizedType)) {
+        return worker.lastResolvedStreamUrl || null;
+      }
+      return worker.lastResolvedStreamUrl || camera.streamUrl;
+    }
+  }
+
+  async runWorkerTick(id) {
+    const worker = this.getWorker(id);
+    if (!worker || worker.stopped || worker.paused || worker.busy) {
+      return;
+    }
+
+    const camera = cameraRepository.getByUser(id, worker.userId);
+    if (!camera) {
+      this.stopWorkerOnly(id);
+      return;
+    }
+
+    worker.busy = true;
+
+    try {
+      const playableStreamUrl = await this.resolveCameraStream(camera, worker);
+      if (!playableStreamUrl) {
+        camera.metrics = {
+          ...camera.metrics,
+          stream_resolution_status: worker.lastResolutionStatus || "connecting",
+          processing_status: "warming_up",
+          camera_health: worker.consecutiveFailures > 3 ? "degraded" : "connecting",
+          updatedAt: new Date().toISOString(),
+        };
+        cameraRepository.save(camera);
+        emitCamera(worker.userId, camera);
+        this.broadcastDashboard(worker.userId);
+        return;
+      }
+
+      const prediction = await mockPredict({
+        sourceType: camera.sourceType || "rtsp",
+        source: playableStreamUrl,
+        cameraId: camera.id,
+        userId: worker.userId,
+        zoneName: camera.zoneName,
+      });
+
+      if (worker.stopped || worker.paused) {
+        return;
+      }
+
+      const frameSignature = prediction.frame_id
+        ? `${prediction.frame_id}:${prediction.updated_at || ""}`
+        : prediction.updated_at || null;
+
+      if (frameSignature && worker.lastFrameSignature === frameSignature) {
+        return;
+      }
+
+      worker.lastFrameSignature = frameSignature;
+      worker.consecutiveFailures = 0;
+
+      camera.status = "running";
+      camera.metrics = {
+        ...camera.metrics,
+        ...prediction,
+        count: getLiveCount(prediction),
+        current_count: getLiveCount(prediction),
+        total_count: Number.isFinite(prediction.total_count)
+          ? Math.max(prediction.total_count, camera.metrics?.total_count ?? 0)
+          : (camera.metrics?.total_count ?? 0),
+        risk: prediction.risk || "Low",
+        confidence: prediction.confidence ?? camera.metrics?.confidence ?? 0,
+        latency_ms: prediction.latency_ms ?? camera.metrics?.latency_ms ?? 0,
+        inference_ms: prediction.inference_ms ?? camera.metrics?.inference_ms ?? 0,
+        camera_health: prediction.camera_health || "good",
+        processing_status: prediction.processing_status || "running",
+        updatedAt: prediction.updated_at || new Date().toISOString(),
+      };
+      camera.lastFrameAt = camera.metrics.updatedAt;
+      cameraRepository.save(camera);
+      emitCamera(worker.userId, camera);
+
+      for (const alert of this.buildAlertsFromPrediction(prediction, camera, worker.userId)) {
+        alertRepository.add(alert);
+        emitAlert(worker.userId, alert);
+      }
+
+      this.broadcastDashboard(worker.userId);
+    } catch (error) {
+      worker.consecutiveFailures += 1;
+      worker.lastError = error.message;
+      console.error(`[camera-worker] prediction failed for ${camera.id}`);
+      console.error(error.message);
+
+      camera.status = "running";
+      camera.metrics = {
+        ...camera.metrics,
+        camera_health: worker.consecutiveFailures > 3 ? "degraded" : "unstable",
+        processing_status: "error",
+        updatedAt: new Date().toISOString(),
+      };
+      cameraRepository.save(camera);
+      emitCamera(worker.userId, camera);
+      this.broadcastDashboard(worker.userId);
+    } finally {
+      worker.busy = false;
+      if (!worker.stopped && !worker.paused) {
+        this.scheduleNextRun(id);
+      }
+    }
+  }
+
+  stopWorkerOnly(id) {
+    const worker = this.getWorker(id);
+    if (!worker) {
+      return;
+    }
+
+    worker.stopped = true;
+    worker.paused = false;
+    this.clearWorkerTimer(worker);
+    this.workers.delete(id);
+    void stopStreamAnalysis(id);
   }
 
   buildDashboard(userId) {
     const cameras = cameraRepository.listByUser(userId);
+    const alerts = alertRepository.listByUser(userId);
     const summary = cameras.reduce(
       (acc, camera) => {
         acc.totalZones += 1;
@@ -52,22 +377,27 @@ class CameraWorkerManager {
       },
       { totalZones: 0, activeZones: 0, totalCount: 0, highRiskZones: 0 }
     );
+    const global = buildGlobalAnalytics(cameras, alerts);
 
     return {
       summary,
+      global,
       cameras,
-      alerts: alertRepository.listByUser(userId),
+      alerts,
       timestamp: new Date().toISOString(),
     };
   }
 
   broadcastDashboard(userId) {
-    emitDashboard(userId, this.buildDashboard(userId));
+    const payload = this.buildDashboard(userId);
+    emitDashboard(userId, payload);
+    emitGlobal(userId, payload.global);
   }
 
   addCamera(camera) {
     cameraRepository.save(camera);
     this.broadcastDashboard(camera.userId);
+    void this.warmupCameraSource(camera, camera.userId);
     return camera;
   }
 
@@ -77,87 +407,100 @@ class CameraWorkerManager {
       throw new Error("Camera not found");
     }
 
-    if (this.workers.has(id)) {
+    const existingWorker = this.getWorker(id);
+    if (existingWorker && !existingWorker.stopped) {
+      existingWorker.paused = false;
+      existingWorker.userId = userId;
+      camera.status = "running";
+      cameraRepository.save(camera);
+      emitCamera(userId, camera);
+      this.scheduleNextRun(id, 0);
       return camera;
     }
 
     camera.status = "running";
     camera.lastStartedAt = new Date().toISOString();
     camera.metrics = buildResetMetrics(camera.metrics);
+    camera.metrics.stream_resolution_status = camera.metrics.stream_resolution_status || "connecting";
+    camera.metrics.processing_status = "warming_up";
     cameraRepository.save(camera);
     emitCamera(userId, camera);
 
-    const runPrediction = async () => {
-      const worker = this.workers.get(id);
-      if (!worker || worker.busy) {
-        return;
-      }
-
-      worker.busy = true;
-
-      try {
-        const prediction = await mockPredict({
-          sourceType: "rtsp",
-          source: camera.streamUrl,
-          cameraId: camera.id,
-          userId,
-          zoneName: camera.zoneName,
-        });
-
-        const frameSignature = prediction.frame_id
-          ? `${prediction.frame_id}:${prediction.updated_at || ""}`
-          : prediction.updated_at || null;
-
-        if (frameSignature && worker.lastFrameSignature === frameSignature) {
-          return;
-        }
-
-        worker.lastFrameSignature = frameSignature;
-
-        camera.metrics = {
-          ...camera.metrics,
-          ...prediction,
-          count: getLiveCount(prediction),
-          current_count: getLiveCount(prediction),
-          total_count: Number.isFinite(prediction.total_count)
-            ? prediction.total_count
-            : (camera.metrics?.total_count ?? 0),
-          risk: prediction.risk || "Low",
-          updatedAt: prediction.updated_at || new Date().toISOString(),
-        };
-        camera.lastFrameAt = camera.metrics.updatedAt;
-        cameraRepository.save(camera);
-        emitCamera(userId, camera);
-
-        for (const alert of this.buildAlertsFromPrediction(prediction, camera, userId)) {
-          alertRepository.add(alert);
-          emitAlert(userId, alert);
-        }
-
-        this.broadcastDashboard(userId);
-      } catch (error) {
-        console.error(`[camera-worker] prediction failed for ${camera.id}`);
-        console.error(error.message);
-      } finally {
-        const latestWorker = this.workers.get(id);
-        if (latestWorker) {
-          latestWorker.busy = false;
-        }
-      }
-    };
-
-    const worker = {
-      busy: false,
-      lastFrameSignature: null,
-      timer: setInterval(() => {
-        void runPrediction();
-      }, aiStreamPollIntervalMs),
-    };
-
+    const worker = this.createWorkerState(camera);
     this.workers.set(id, worker);
-    void runPrediction();
+    void this.warmupCameraSource(camera, userId);
+    void this.runWorkerTick(id);
     this.broadcastDashboard(userId);
     return camera;
+  }
+
+  pauseCamera(id, userId) {
+    const camera = cameraRepository.getByUser(id, userId);
+    if (!camera) {
+      throw new Error("Camera not found");
+    }
+
+    const worker = this.getWorker(id);
+    if (!worker) {
+      camera.status = "paused";
+      camera.metrics = {
+        ...camera.metrics,
+        processing_status: "paused",
+        stream_resolution_status: camera.metrics?.stream_resolution_status || "connecting",
+        updatedAt: new Date().toISOString(),
+      };
+      cameraRepository.save(camera);
+      emitCamera(userId, camera);
+      this.broadcastDashboard(userId);
+      return camera;
+    }
+
+    worker.paused = true;
+    this.clearWorkerTimer(worker);
+    camera.status = "paused";
+    camera.metrics = {
+      ...camera.metrics,
+      processing_status: "paused",
+      updatedAt: new Date().toISOString(),
+    };
+    cameraRepository.save(camera);
+    emitCamera(userId, camera);
+    this.broadcastDashboard(userId);
+    return camera;
+  }
+
+  resumeCamera(id, userId) {
+    const camera = cameraRepository.getByUser(id, userId);
+    if (!camera) {
+      throw new Error("Camera not found");
+    }
+
+    const worker = this.getWorker(id);
+    if (!worker) {
+      return this.startCamera(id, userId);
+    }
+
+    worker.userId = userId;
+    worker.paused = false;
+    worker.stopped = false;
+    camera.status = "running";
+    camera.metrics = {
+      ...camera.metrics,
+      processing_status: "running",
+      stream_resolution_status: camera.metrics?.stream_resolution_status || "connecting",
+      updatedAt: new Date().toISOString(),
+    };
+    cameraRepository.save(camera);
+    emitCamera(userId, camera);
+    void this.warmupCameraSource(camera, userId);
+    this.scheduleNextRun(id, 0);
+    this.broadcastDashboard(userId);
+    return camera;
+  }
+
+  restartCamera(id, userId) {
+    this.stopCamera(id, userId);
+    return this.startCamera(id, userId);
   }
 
   stopCamera(id, userId) {
@@ -166,17 +509,12 @@ class CameraWorkerManager {
       throw new Error("Camera not found");
     }
 
-    const worker = this.workers.get(id);
-    if (worker) {
-      clearInterval(worker.timer);
-      this.workers.delete(id);
-    }
-
-    void stopStreamAnalysis(id);
+    this.stopWorkerOnly(id);
     this.alertCache.delete(id);
 
     camera.status = "stopped";
     camera.metrics = buildResetMetrics(camera.metrics);
+    camera.metrics.stream_resolution_status = camera.metrics.stream_resolution_status || "idle";
     camera.lastFrameAt = camera.metrics.updatedAt;
     cameraRepository.save(camera);
     emitCamera(userId, camera);
@@ -193,7 +531,8 @@ class CameraWorkerManager {
 
   shutdown() {
     for (const [cameraId, worker] of this.workers.entries()) {
-      clearInterval(worker.timer);
+      this.clearWorkerTimer(worker);
+      worker.stopped = true;
       void stopStreamAnalysis(cameraId);
     }
     this.workers.clear();

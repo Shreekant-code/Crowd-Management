@@ -9,7 +9,13 @@ const initialForm = {
   zoneName: "",
   location: "",
   streamUrl: "",
+  sourceType: "http",
 };
+
+function isYouTubeSource(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized.includes("youtube.com") || normalized.includes("youtu.be");
+}
 
 export function CameraForm({ onCameraCreated, onCameraChanged }) {
   const [form, setForm] = useState(initialForm);
@@ -17,6 +23,16 @@ export function CameraForm({ onCameraCreated, onCameraChanged }) {
 
   function updateField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateStreamUrl(value) {
+    setForm((current) => {
+      const nextForm = { ...current, streamUrl: value };
+      if (isYouTubeSource(value)) {
+        nextForm.sourceType = "public";
+      }
+      return nextForm;
+    });
   }
 
   async function handleSubmit(event) {
@@ -34,7 +50,7 @@ export function CameraForm({ onCameraCreated, onCameraChanged }) {
         onCameraCreated(latestCamera);
       }
       if (onCameraChanged) {
-        await onCameraChanged();
+        await onCameraChanged(latestCamera);
       }
       setForm(initialForm);
       setStatus({ loading: false, message: "Camera zone added and started successfully.", error: "" });
@@ -73,13 +89,37 @@ export function CameraForm({ onCameraCreated, onCameraChanged }) {
         />
       </label>
       <label className="block space-y-2">
+        <span className="text-sm font-medium text-slate-700">Source Type</span>
+        <select
+          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-slateblue"
+          value={form.sourceType}
+          onChange={(event) => updateField("sourceType", event.target.value)}
+        >
+          <option value="http">HTTP Live Stream</option>
+          <option value="rtsp">RTSP Camera</option>
+          <option value="webcam">Webcam</option>
+          <option value="public">YouTube / Public Embed</option>
+        </select>
+      </label>
+      <label className="block space-y-2">
         <span className="text-sm font-medium text-slate-700">Stream URL</span>
         <input
           className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-slateblue"
           value={form.streamUrl}
-          onChange={(event) => updateField("streamUrl", event.target.value)}
-          placeholder="http://phone-ip:8080/video or rtsp://camera/live"
+          onChange={(event) => updateStreamUrl(event.target.value)}
+          placeholder={
+            form.sourceType === "rtsp"
+              ? "rtsp://camera/live"
+              : form.sourceType === "webcam"
+                ? "webcam://0"
+                : form.sourceType === "public"
+                  ? "https://www.youtube.com/embed/VIDEO_ID"
+                  : "http://phone-ip:8080/video"
+          }
         />
+        <p className="text-xs text-slate-500">
+          For public sources, prefer a YouTube embed URL or a direct public video stream. The backend will try to resolve a playable stream for analytics.
+        </p>
       </label>
 
       {status.message ? (

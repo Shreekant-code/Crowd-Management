@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import cameraRoutes from "./routes/cameraRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
+import globalRoutes from "./routes/globalRoutes.js";
 import streamRoutes from "./routes/streamRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import { receiveUploadResult } from "./controllers/aiCallbackController.js";
@@ -27,6 +28,7 @@ app.post("/internal/ai/upload-result", requireAiCallbackAuth, receiveUploadResul
 
 app.use("/api/cameras", requirePlatformAuth, cameraRoutes);
 app.use("/api/dashboard", requirePlatformAuth, dashboardRoutes);
+app.use("/api/global", requirePlatformAuth, globalRoutes);
 app.use("/api/stream", requirePlatformAuth, streamRoutes);
 app.use("/api/uploads", requirePlatformAuth, uploadRoutes);
 
