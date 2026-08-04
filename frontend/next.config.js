@@ -4,6 +4,7 @@ const path = require("path");
 const nextConfig = {
   typedRoutes: false,
   outputFileTracingRoot: path.resolve(__dirname, ".."),
+  turbopack: {},
   webpack: (config, { dev }) => {
     if (dev) {
       config.cache = false;

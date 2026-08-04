@@ -6,6 +6,7 @@ import queue
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from typing import Any, Optional, Tuple
@@ -23,7 +24,7 @@ from utils.config import (
 
 _RESOLVE_CACHE: dict[str, tuple[float, str]] = {}
 _RESOLVE_CACHE_TTL_SECONDS = 300.0
-_SOURCE_PROBE_FRAMES = int(os.getenv("SOURCE_PROBE_FRAMES", "2"))
+_SOURCE_PROBE_FRAMES = int(os.getenv("SOURCE_PROBE_FRAMES", "1"))
 _SOURCE_PROBE_TIMEOUT_SECONDS = float(os.getenv("SOURCE_PROBE_TIMEOUT_SECONDS", "4.0"))
 _SOURCE_OPEN_TIMEOUT_SECONDS = float(os.getenv("SOURCE_OPEN_TIMEOUT_SECONDS", "8.0"))
 
@@ -167,19 +168,26 @@ def _fetch_text_with_timeout(url: str, timeout_seconds: float = 8.0) -> str:
     return response.text
 
 
-def _try_resolve_with_ytdlp(video_url: str) -> Optional[str]:
+def _try_resolve_with_ytdlp(video_url: str, stop_event: Optional[threading.Event] = None) -> Optional[str]:
     target_url = (video_url or "").strip()
     if not target_url:
         return None
 
-    for command in ("yt-dlp", "yt-dlp.exe", "youtube-dl", "youtube-dl.exe"):
-        if shutil.which(command) is None:
-            continue
+    if stop_event and stop_event.is_set():
+        return None
 
+    commands = []
+    if shutil.which("yt-dlp"):
+        commands.append(["yt-dlp"])
+    commands.append([sys.executable, "-m", "yt_dlp"])
+
+    for cmd in commands:
+        if stop_event and stop_event.is_set():
+            return None
         try:
-            completed = subprocess.run(
+            proc = subprocess.Popen(
                 [
-                    command,
+                    *cmd,
                     "--no-warnings",
                     "--no-playlist",
                     "--skip-download",
@@ -188,31 +196,79 @@ def _try_resolve_with_ytdlp(video_url: str) -> Optional[str]:
                     "best[protocol^=m3u8]/best",
                     target_url,
                 ],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=12,
-                check=False,
             )
+
+            deadline = time.time() + 12.0
+            stdout_data = ""
+            while time.time() < deadline:
+                if stop_event and stop_event.is_set():
+                    proc.kill()
+                    return None
+
+                try:
+                    stdout_data, _ = proc.communicate(timeout=0.2)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+            if proc.returncode != 0:
+                continue
+
+            for line in (stdout_data or "").splitlines():
+                candidate = line.strip()
+                if candidate:
+                    return candidate
         except Exception:
             continue
-
-        if completed.returncode != 0:
-            continue
-
-        for line in (completed.stdout or "").splitlines():
-            candidate = line.strip()
-            if candidate:
-                return candidate
 
     return None
 
 
-def _probe_capture(capture: cv2.VideoCapture, stream_url: str) -> bool:
+def _format_backend_failure_message(
+    stage: str,
+    *,
+    candidate_url: str,
+    candidate_type: str,
+    backend_name: str,
+    error: Optional[str] = None,
+    details: Optional[str] = None,
+) -> str:
+    parts = [f"[stream-loader] {stage} backend={backend_name} type={candidate_type} url={candidate_url}"]
+    if error:
+        parts.append(f"error={error}")
+    if details:
+        parts.append(f"details={details}")
+    return " ".join(parts)
+
+
+def _log_backend_failure(
+    stage: str,
+    *,
+    candidate_url: str,
+    candidate_type: str,
+    backend_name: str,
+    error: Optional[str] = None,
+    details: Optional[str] = None,
+) -> None:
+    print(_format_backend_failure_message(stage, candidate_url=candidate_url, candidate_type=candidate_type, backend_name=backend_name, error=error, details=details))
+
+
+def _probe_capture(capture: cv2.VideoCapture, stream_url: str, stop_event: Optional[threading.Event] = None) -> bool:
     deadline_seconds = max(min(_SOURCE_PROBE_TIMEOUT_SECONDS, _SOURCE_OPEN_TIMEOUT_SECONDS), 1.0)
     deadline = time.time() + deadline_seconds
     frames_seen = 0
 
     while time.time() < deadline and frames_seen < max(_SOURCE_PROBE_FRAMES, 1):
+        if stop_event and stop_event.is_set():
+            raise RuntimeError("Probe cancelled by shutdown signal")
+
         ok, frame = capture.read()
         if ok and frame is not None and hasattr(frame, "shape") and len(frame.shape) >= 2:
             frames_seen += 1
@@ -220,15 +276,32 @@ def _probe_capture(capture: cv2.VideoCapture, stream_url: str) -> bool:
                 return True
             continue
 
-        time.sleep(0.2)
+        if stop_event and stop_event.wait(timeout=0.1):
+            raise RuntimeError("Probe cancelled by shutdown signal")
+        elif not stop_event:
+            time.sleep(0.2)
 
     raise RuntimeError(f"Unable to decode playable frames from {stream_url}")
 
 
-def resolve_playable_stream_url(stream_url: str, source_type: str = "") -> str:
+def _configure_ffmpeg_http_options(stream_url: str) -> None:
+    if not stream_url:
+        return
+
+    normalized = (stream_url or "").strip().lower()
+    if normalized.startswith("rtsp://"):
+        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;udp")
+    elif normalized.startswith("http://") or normalized.startswith("https://"):
+        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "timeout;5000000")
+
+
+def resolve_playable_stream_url(stream_url: str, source_type: str = "", stop_event: Optional[threading.Event] = None) -> str:
     raw_url = _coerce_source_url(stream_url)
     if not raw_url:
         raise ValueError("stream URL is empty")
+
+    if stop_event and stop_event.is_set():
+        raise RuntimeError("Stream resolution cancelled by shutdown signal")
 
     cache_key = f"{(source_type or '').lower()}:{raw_url}"
     cached = _RESOLVE_CACHE.get(cache_key)
@@ -256,7 +329,6 @@ def resolve_playable_stream_url(stream_url: str, source_type: str = "") -> str:
     candidates = []
     if video_id:
         candidates.extend([
-            f"https://www.youtube.com/get_video_info?video_id={video_id}&el=detailpage&hl=en",
             f"https://www.youtube.com/watch?v={video_id}&hl=en&gl=US",
             f"https://www.youtube.com/embed/{video_id}",
         ])
@@ -264,6 +336,8 @@ def resolve_playable_stream_url(stream_url: str, source_type: str = "") -> str:
         candidates.append(raw_url)
 
     for candidate in candidates:
+        if stop_event and stop_event.is_set():
+            raise RuntimeError("Stream resolution cancelled by shutdown signal")
         text = _fetch_text_with_timeout(candidate)
         parsed = _parse_player_response(text)
         hls_manifest_url = (parsed or {}).get("streamingData", {}).get("hlsManifestUrl")
@@ -273,9 +347,9 @@ def resolve_playable_stream_url(stream_url: str, source_type: str = "") -> str:
 
         iframe_match = re.search(r"youtube\.com/embed/([A-Za-z0-9_-]{6,})", text, flags=re.IGNORECASE)
         if iframe_match and iframe_match.group(1) != video_id:
-            return resolve_playable_stream_url(f"https://www.youtube.com/watch?v={iframe_match.group(1)}", "public")
+            return resolve_playable_stream_url(f"https://www.youtube.com/watch?v={iframe_match.group(1)}", "public", stop_event=stop_event)
 
-    ytdlp_resolved = _try_resolve_with_ytdlp(raw_url)
+    ytdlp_resolved = _try_resolve_with_ytdlp(raw_url, stop_event=stop_event)
     if ytdlp_resolved:
         _RESOLVE_CACHE[cache_key] = (time.time(), ytdlp_resolved)
         return ytdlp_resolved
@@ -304,11 +378,11 @@ def detect_stream_type(stream_url: str) -> str:
     raise ValueError(f"Unsupported stream URL: {stream_url}")
 
 
-def create_video_capture(stream_url: str) -> cv2.VideoCapture:
+def create_video_capture(stream_url: str, stop_event: Optional[threading.Event] = None) -> cv2.VideoCapture:
     source_url = _coerce_source_url(stream_url)
-    resolved_stream_url = resolve_playable_stream_url(source_url)
+    resolved_stream_url = resolve_playable_stream_url(source_url, stop_event=stop_event)
     candidate_urls = [resolved_stream_url]
-    if source_url and source_url != resolved_stream_url:
+    if source_url and source_url != resolved_stream_url and detect_stream_type(source_url) != "public":
         candidate_urls.append(source_url)
 
     stream_type = detect_stream_type(resolved_stream_url)
@@ -319,7 +393,11 @@ def create_video_capture(stream_url: str) -> cv2.VideoCapture:
 
     last_error: Optional[str] = None
     for candidate_url in candidate_urls:
+        if stop_event and stop_event.is_set():
+            raise RuntimeError("Capture initialization cancelled by shutdown signal")
+
         candidate_type = detect_stream_type(candidate_url)
+        backend_name = "opencv"
         if candidate_type == "webcam":
             webcam_source = (candidate_url or "").strip().split("://", 1)[-1]
             if webcam_source.isdigit():
@@ -327,7 +405,20 @@ def create_video_capture(stream_url: str) -> cv2.VideoCapture:
             else:
                 capture = cv2.VideoCapture(0)
         elif candidate_type in {"rtsp", "http", "hls", "mjpeg", "public"}:
+            backend_name = "ffmpeg"
+            _configure_ffmpeg_http_options(candidate_url)
             capture = cv2.VideoCapture(candidate_url, cv2.CAP_FFMPEG)
+            if not capture.isOpened():
+                capture.release()
+                _log_backend_failure(
+                    "capture failed",
+                    candidate_url=candidate_url,
+                    candidate_type=candidate_type,
+                    backend_name=backend_name,
+                    error="FFmpeg backend could not open source",
+                )
+                capture = cv2.VideoCapture(candidate_url)
+                backend_name = "opencv"
         else:
             capture = cv2.VideoCapture(candidate_url)
 
@@ -336,19 +427,30 @@ def create_video_capture(stream_url: str) -> cv2.VideoCapture:
         if not capture.isOpened():
             capture.release()
             last_error = f"Unable to open {candidate_type} stream: {candidate_url}"
-            print(f"[stream-loader] connection failed type={candidate_type} url={candidate_url}")
+            _log_backend_failure(
+                "capture failed",
+                candidate_url=candidate_url,
+                candidate_type=candidate_type,
+                backend_name=backend_name,
+                error=last_error,
+            )
             continue
 
         try:
-            _probe_capture(capture, candidate_url)
+            _probe_capture(capture, candidate_url, stop_event=stop_event)
         except Exception as error:
             last_error = str(error)
-            print(f"[stream-loader] probe failed type={candidate_type} url={candidate_url}")
-            print(last_error)
+            _log_backend_failure(
+                "probe failed",
+                candidate_url=candidate_url,
+                candidate_type=candidate_type,
+                backend_name=backend_name,
+                error=last_error,
+            )
             capture.release()
             continue
 
-        print(f"[stream-loader] connection established type={candidate_type} url={candidate_url}")
+        print(f"[stream-loader] connection established type={candidate_type} backend={backend_name} url={candidate_url}")
         return capture
 
     raise RuntimeError(last_error or f"Unable to open stream: {resolved_stream_url}")
@@ -407,10 +509,16 @@ class LatestFrameCapture:
     def _reader_loop(self) -> None:
         while not self.stop_event.is_set():
             try:
+                if self.stop_event.is_set():
+                    break
+
                 if self.capture is None:
                     self.last_error = None
-                    self.capture = create_video_capture(self.stream_url)
+                    self.capture = create_video_capture(self.stream_url, stop_event=self.stop_event)
                     self.reconnect_attempt = 0
+
+                if self.stop_event.is_set():
+                    break
 
                 ok, frame = self.capture.read()
                 if not ok or frame is None:
@@ -419,13 +527,20 @@ class LatestFrameCapture:
                 captured_at = time.perf_counter()
                 self._push_latest((frame, captured_at))
             except Exception as error:
+                if self.stop_event.is_set():
+                    break
                 self.last_error = str(error)
                 self.reconnect_attempt += 1
                 if self.capture is not None:
-                    self.capture.release()
+                    try:
+                        self.capture.release()
+                    except Exception:
+                        pass
                     self.capture = None
                 backoff = max(STREAM_RECONNECT_DELAY_SECONDS, 0.5) * min(4.0, 1.0 + (self.reconnect_attempt * 0.5))
-                time.sleep(min(backoff, 10.0))
+                sleep_time = min(backoff, 10.0)
+                if self.stop_event.wait(timeout=sleep_time):
+                    break
 
     def _push_latest(self, item: Tuple[Any, float]) -> None:
         while not self.frame_queue.empty():

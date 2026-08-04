@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import datetime, timezone
@@ -16,9 +17,12 @@ from utils.config import (
     STREAM_TARGET_FPS,
 )
 from utils.crowd_runtime import CrowdRuntime, get_shared_csrnet
+from utils.error_logging import install_error_handlers
 from utils.stream_loader import LatestFrameCapture, detect_stream_type
 
 app = FastAPI(title="Advanced Crowd Analytics", version="2.0.0")
+install_error_handlers(app)
+logger = logging.getLogger(__name__)
 sessions_lock = threading.Lock()
 sessions: Dict[str, "LiveSession"] = {}
 
@@ -130,6 +134,14 @@ class LiveSession:
                     self.last_processed_at = time.time()
                     self.last_access_at = time.time()
                     self.status = "running"
+        except Exception as error:
+            self.status = "failed"
+            logger.exception(
+                "advanced_stream_session_failed camera_id=%s stream_type=%s",
+                self.camera_id,
+                stream_type,
+                exc_info=error,
+            )
         finally:
             reader.stop()
             self.runtime.shutdown()

@@ -1,11 +1,13 @@
 const fs = require("fs");
 const path = require("path");
 
-const nextDir = path.resolve(__dirname, "..", ".next");
+const cacheDir = path.resolve(__dirname, "..", ".next", "cache");
 
 try {
-  fs.rmSync(nextDir, { recursive: true, force: true });
-  console.log(`[clean-next-cache] cleared ${nextDir}`);
+  if (fs.existsSync(cacheDir)) {
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+    console.log(`[clean-next-cache] cleared ${cacheDir}`);
+  }
 } catch (error) {
-  console.warn(`[clean-next-cache] unable to clear ${nextDir}: ${error.message}`);
+  console.warn(`[clean-next-cache] unable to clear ${cacheDir}: ${error.message}`);
 }

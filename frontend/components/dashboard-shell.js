@@ -90,7 +90,12 @@ export function DashboardShell({ initialData, operatorName }) {
   const [globalState, setGlobalState] = useState(() => buildGlobalFallback(initialData || {}));
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
   const [isGlobalDockOpen, setIsGlobalDockOpen] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
   const topActiveZones = getTopActiveZones(dashboard.cameras || []);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   function applyDashboard(payload) {
     if (!payload || !Array.isArray(payload.cameras)) {
@@ -215,50 +220,51 @@ export function DashboardShell({ initialData, operatorName }) {
 
   useEffect(() => {
     let activeSocket;
-    let refreshInterval;
 
     async function connectSocket() {
-      const socket = await getSocket();
-      activeSocket = socket;
-      await refreshDashboard();
-      refreshInterval = setInterval(() => {
-        void refreshDashboard();
-      }, 1500);
+      try {
+        const socket = await getSocket();
+        activeSocket = socket;
+        await refreshDashboard();
 
-      socket.on("dashboard:update", (payload) => {
-        applyDashboard(payload);
-      });
+        socket.on("dashboard:update", (payload) => {
+          applyDashboard(payload);
+        });
 
-      socket.on("camera:update", (camera) => {
-        upsertCamera(camera);
-      });
+        socket.on("camera:update", (camera) => {
+          upsertCamera(camera);
+        });
 
-      socket.on("alert:new", (alert) => {
-        setDashboard((current) => ({
-          ...current,
-          alerts: [alert, ...(current?.alerts || [])].slice(0, 40),
-        }));
-      });
+        socket.on("alert:new", (alert) => {
+          setDashboard((current) => ({
+            ...current,
+            alerts: [alert, ...(current?.alerts || [])].slice(0, 40),
+          }));
+        });
 
-      socket.on("global:update", (payload) => {
-        updateGlobal(payload);
-      });
+        socket.on("global:update", (payload) => {
+          updateGlobal(payload);
+        });
 
-      socket.on("global:prediction", (payload) => {
-        updateGlobal({ globalPrediction: payload?.globalPrediction || payload });
-      });
+        socket.on("global:prediction", (payload) => {
+          updateGlobal({ globalPrediction: payload?.globalPrediction || payload });
+        });
 
-      socket.on("dashboard:summary", (payload) => {
-        updateGlobal(payload);
-      });
+        socket.on("dashboard:summary", (payload) => {
+          updateGlobal(payload);
+        });
+
+        socket.on("connect", () => {
+          void refreshDashboard();
+        });
+      } catch (error) {
+        console.error("Dashboard shell failed to connect socket", error);
+      }
     }
 
     connectSocket();
 
     return () => {
-      if (refreshInterval) {
-        clearInterval(refreshInterval);
-      }
       if (activeSocket) {
         activeSocket.off("dashboard:update");
         activeSocket.off("camera:update");
@@ -266,6 +272,7 @@ export function DashboardShell({ initialData, operatorName }) {
         activeSocket.off("global:update");
         activeSocket.off("global:prediction");
         activeSocket.off("dashboard:summary");
+        activeSocket.off("connect");
       }
     };
   }, []);
@@ -291,7 +298,7 @@ export function DashboardShell({ initialData, operatorName }) {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <div className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-600">
                 <p className="font-medium text-slate-900">{operatorName}</p>
-                <p>Last live sync: {lastSocketAt ? new Date(lastSocketAt).toLocaleTimeString() : "Waiting"}</p>
+                <p>Last live sync: {isMounted && lastSocketAt ? new Date(lastSocketAt).toLocaleTimeString() : "Waiting"}</p>
               </div>
               <button
                 className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-medium text-white transition hover:bg-slate-800"

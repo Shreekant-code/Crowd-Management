@@ -13,17 +13,24 @@ export async function GET(_request, { params }) {
 
   const { id } = await params;
 
-  const response = await fetch(`${backendUrl}/api/cameras/${id}/preview`, {
-    headers: {
-      "x-platform-secret": platformApiSecret,
-      "x-user-id": session.user.id,
-      "x-user-email": session.user.email,
-    },
-    cache: "no-store",
-  });
+  let response;
+  try {
+    response = await fetch(`${backendUrl}/api/cameras/${id}/preview`, {
+      headers: {
+        "x-platform-secret": platformApiSecret,
+        "x-user-id": session.user.id,
+        "x-user-email": session.user.email,
+      },
+      cache: "no-store",
+    });
+  } catch (error) {
+    console.error("camera_preview_proxy_request_failed", { cameraId: id, backendUrl, error });
+    return new Response("Camera preview request failed before the backend could respond.", { status: 502 });
+  }
 
   if (!response.ok || !response.body) {
     const message = response.ok ? "Camera preview unavailable" : await response.text();
+    console.error("camera_preview_proxy_response_failed", { cameraId: id, status: response.status, message });
     return new Response(message, { status: response.status || 502 });
   }
 

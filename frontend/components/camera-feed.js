@@ -2,41 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LoaderCircle, VideoOff } from "lucide-react";
-
-const STREAM_STALE_MS = 12000;
-const STREAM_RETRY_MS = 8000;
-
-function getFeedSource(camera, retrySeed, streamMode) {
-  if (!camera?.id) {
-    return null;
-  }
-
-  if (streamMode === "ai") {
-    return `/api/stream/${camera.id}?retry=${retrySeed}`;
-  }
-
-  return `/api/platform/cameras/${camera.id}/preview?retry=${retrySeed}&mode=${streamMode}`;
-}
-
-function getStreamStatus(camera, metrics, imageErrored, isLoaded) {
-  if (camera.status !== "running") {
-    return "idle";
-  }
-
-  if (imageErrored) {
-    return "reconnecting";
-  }
-
-  const updatedAt = metrics?.updatedAt || camera.lastFrameAt || camera.lastStartedAt;
-  if (updatedAt) {
-    const ageMs = Date.now() - new Date(updatedAt).getTime();
-    if (ageMs > STREAM_STALE_MS) {
-      return "reconnecting";
-    }
-  }
-
-  return isLoaded ? "live" : "connecting";
-}
+import { useStreamManager, STREAM_STATES, STREAM_MODES } from "@/lib/stream-manager";
 
 function getRiskAccent(risk) {
   if (risk === "Critical") {
@@ -123,214 +89,61 @@ function getDetectionBox(detection = {}) {
 export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
   const imageRef = useRef(null);
   const canvasRef = useRef(null);
-  const [liveMetrics, setLiveMetrics] = useState(camera.metrics || {});
-  const metricsRef = useRef(camera.metrics || {});
   const mediaSizeRef = useRef({ width: 960, height: 540 });
-  const [retrySeed, setRetrySeed] = useState(0);
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [imageErrored, setImageErrored] = useState(false);
   const [mediaSize, setMediaSize] = useState({ width: 960, height: 540 });
-  const [streamStartedAt, setStreamStartedAt] = useState(() => Date.now());
-  const [streamMode, setStreamMode] = useState("ai");
-  const [streamResolutionStatus, setStreamResolutionStatus] = useState("direct");
-  const streamStatus = getStreamStatus(camera, liveMetrics, imageErrored, isLoaded);
-  const feedSource = useMemo(
-    () => getFeedSource(camera, retrySeed, streamMode),
-    [camera, retrySeed, streamMode]
-  );
-  const riskAccent = getRiskAccent(liveMetrics?.risk || "Low");
-  const sourceBadge = useMemo(() => {
-    if (camera.status !== "running") {
-      return { label: "Stopped", tone: "bg-slate-100 text-slate-500 border-slate-200" };
-    }
 
-    if (camera.sourceType === "public") {
-      if (streamResolutionStatus === "fallback_preview") {
-        return { label: "Fallback preview", tone: "bg-amber-100 text-amber-700 border-amber-200" };
-      }
-      if (streamResolutionStatus === "unresolved") {
-        return { label: "Unresolved", tone: "bg-red-100 text-red-700 border-red-200" };
-      }
-      return { label: "Public stream", tone: "bg-sky-100 text-sky-700 border-sky-200" };
-    }
+  const containerRef = useRef(null);
+  const boundsRef = useRef({ width: 960, height: 540, naturalWidth: 960, naturalHeight: 540 });
 
-    return { label: "Direct stream", tone: "bg-teal-100 text-teal-700 border-teal-200" };
-  }, [camera.sourceType, camera.status, streamResolutionStatus]);
+  const {
+    status: streamStatus,
+    streamMode,
+    feedSource,
+    liveMetrics,
+    streamResolutionStatus,
+    sourceBadge,
+    handleImageLoad: onStreamManagerLoad,
+    handleImageError: onStreamManagerError,
+  } = useStreamManager({ camera, onLiveMetricsChange });
+
+  const metricsRef = useRef(liveMetrics);
 
   useEffect(() => {
-    const mergedMetrics = camera.metrics || {};
-    setLiveMetrics(mergedMetrics);
-    metricsRef.current = mergedMetrics;
-  }, [camera.metrics]);
-
-  useEffect(() => {
-    setRetrySeed(0);
-    setIsLoaded(false);
-    setImageErrored(false);
-    setStreamStartedAt(Date.now());
-    setStreamMode("ai");
-    setStreamResolutionStatus("direct");
-  }, [camera.id]);
+    metricsRef.current = liveMetrics;
+  }, [liveMetrics]);
 
   useEffect(() => {
     mediaSizeRef.current = mediaSize;
   }, [mediaSize]);
 
+  // Use ResizeObserver to cache layout dimensions without layout thrashing inside rAF
   useEffect(() => {
-    if (camera.status !== "running" || !camera.id) {
-      return undefined;
-    }
+    const container = containerRef.current;
+    if (!container) return;
 
-    let cancelled = false;
-
-    async function refreshStats() {
-      try {
-        const response = await fetch(`/api/stream/${camera.id}/stats`, { cache: "no-store" });
-        if (!response.ok) {
-          return;
-        }
-
-        const payload = await response.json();
-        if (cancelled) {
-          return;
-        }
-
-        const nextMetrics = payload?.metrics || {};
-        setLiveMetrics(nextMetrics);
-        metricsRef.current = nextMetrics;
-        if (payload?.stream_resolution_status) {
-          setStreamResolutionStatus(payload.stream_resolution_status);
-        } else if (nextMetrics?.stream_resolution_status) {
-          setStreamResolutionStatus(nextMetrics.stream_resolution_status);
-        } else if (camera.sourceType === "public") {
-          setStreamResolutionStatus(streamMode === "preview" ? "fallback_preview" : "direct");
-        } else {
-          setStreamResolutionStatus("direct");
-        }
-        if (onLiveMetricsChange) {
-          onLiveMetricsChange(camera.id, nextMetrics, payload?.updatedAt);
-        }
-      } catch (_error) {
-        // Keep last known metrics when polling briefly fails.
-      }
-    }
-
-    void refreshStats();
-    const interval = setInterval(() => {
-      void refreshStats();
-    }, 400);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [camera.id, camera.status, camera.sourceType, onLiveMetricsChange, streamMode]);
-
-  useEffect(() => {
-    if (camera.status !== "running") {
-      setIsLoaded(false);
-      setImageErrored(false);
-      return;
-    }
-
-    if (!imageErrored) {
-      return;
-    }
-
-    const timeout = setTimeout(() => {
-      if (streamMode === "ai") {
-        setStreamMode("preview");
-        if (camera.sourceType === "public") {
-          setStreamResolutionStatus("fallback_preview");
-        }
-        setRetrySeed(0);
-      } else {
-        setRetrySeed((current) => current + 1);
-      }
-      setImageErrored(false);
-      setIsLoaded(false);
-    }, 1500);
-
-    return () => clearTimeout(timeout);
-  }, [camera.status, imageErrored, streamMode]);
-
-  useEffect(() => {
-    if (camera.status !== "running" || isLoaded) {
-      return undefined;
-    }
-
-    const timeout = setTimeout(() => {
-      if (streamMode === "ai") {
-        setStreamMode("preview");
-        if (camera.sourceType === "public") {
-          setStreamResolutionStatus("fallback_preview");
-        }
-        setRetrySeed(0);
-      } else {
-        setRetrySeed((current) => current + 1);
-      }
-      setImageErrored(false);
-      setIsLoaded(false);
-      setStreamStartedAt(Date.now());
-    }, STREAM_RETRY_MS);
-
-    return () => clearTimeout(timeout);
-  }, [camera.status, isLoaded, retrySeed, streamMode]);
-
-  useEffect(() => {
-    if (camera.status !== "running" || isLoaded || !feedSource) {
-      return undefined;
-    }
-
-    const interval = setInterval(() => {
+    const updateBounds = () => {
+      const rect = container.getBoundingClientRect();
       const image = imageRef.current;
-      if (!image) {
-        return;
-      }
+      boundsRef.current = {
+        width: Math.max(Math.round(rect.width), 1),
+        height: Math.max(Math.round(rect.height), 1),
+        naturalWidth: image?.naturalWidth || mediaSizeRef.current.width || 960,
+        naturalHeight: image?.naturalHeight || mediaSizeRef.current.height || 540,
+      };
+    };
 
-      const naturalWidth = image.naturalWidth || 0;
-      const naturalHeight = image.naturalHeight || 0;
-      if (naturalWidth > 0 && naturalHeight > 0) {
-        setMediaSize({
-          width: naturalWidth,
-          height: naturalHeight,
-        });
-        setIsLoaded(true);
-        setImageErrored(false);
-      }
-    }, 500);
+    updateBounds();
+    const observer = new ResizeObserver(updateBounds);
+    observer.observe(container);
 
-    return () => clearInterval(interval);
-  }, [camera.status, feedSource, isLoaded]);
+    return () => observer.disconnect();
+  }, []);
 
-  useEffect(() => {
-    const updatedAt = liveMetrics?.updatedAt || camera.lastFrameAt || camera.lastStartedAt;
-    if (!updatedAt || isLoaded || camera.status !== "running") {
-      return;
-    }
-
-    const ageMs = Date.now() - new Date(updatedAt).getTime();
-    const loadingMs = Date.now() - streamStartedAt;
-    if (ageMs < STREAM_STALE_MS / 2 && loadingMs > STREAM_RETRY_MS) {
-      if (streamMode === "ai") {
-        setStreamMode("preview");
-        if (camera.sourceType === "public") {
-          setStreamResolutionStatus("fallback_preview");
-        }
-        setRetrySeed(0);
-      } else {
-        setRetrySeed((current) => current + 1);
-      }
-      setImageErrored(false);
-      setIsLoaded(false);
-      setStreamStartedAt(Date.now());
-    }
-  }, [camera.lastFrameAt, camera.lastStartedAt, camera.status, isLoaded, liveMetrics?.updatedAt, streamMode, streamStartedAt]);
+  const isLive = streamStatus === STREAM_STATES.LIVE;
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const image = imageRef.current;
-    if (!canvas || !image || !isLoaded) {
+    if (!canvas || !isLive) {
       return;
     }
 
@@ -343,16 +156,14 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
 
     const drawOverlay = () => {
       const now = performance.now();
-      if (now - lastDrawAt < 100) {
+      if (now - lastDrawAt < 80) {
         animationFrameId = window.requestAnimationFrame(drawOverlay);
         return;
       }
       lastDrawAt = now;
 
-      const rect = image.getBoundingClientRect();
+      const { width, height, naturalWidth, naturalHeight } = boundsRef.current;
       const dpr = window.devicePixelRatio || 1;
-      const width = Math.max(Math.round(rect.width), 1);
-      const height = Math.max(Math.round(rect.height), 1);
 
       if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
         canvas.width = width * dpr;
@@ -365,13 +176,20 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
       context.clearRect(0, 0, width, height);
 
       const metrics = metricsRef.current || {};
-      const sourceWidth = mediaSizeRef.current.width || width;
-      const sourceHeight = mediaSizeRef.current.height || height;
-      const display = getDisplayRect(image, width, height);
-      const scaleX = display.displayWidth / sourceWidth;
-      const scaleY = display.displayHeight / sourceHeight;
-      const offsetX = display.offsetX;
-      const offsetY = display.offsetY;
+      const sourceWidth = mediaSizeRef.current.width || naturalWidth || width;
+      const sourceHeight = mediaSizeRef.current.height || naturalHeight || height;
+
+      // Pure math scaling calculation without DOM query reflows
+      const ratioX = width / Math.max(naturalWidth, 1);
+      const ratioY = height / Math.max(naturalHeight, 1);
+      const scale = Math.min(ratioX, ratioY);
+      const displayWidth = naturalWidth * scale;
+      const displayHeight = naturalHeight * scale;
+      const offsetX = Math.max((width - displayWidth) / 2, 0);
+      const offsetY = Math.max((height - displayHeight) / 2, 0);
+
+      const scaleX = displayWidth / Math.max(sourceWidth, 1);
+      const scaleY = displayHeight / Math.max(sourceHeight, 1);
       const heatmapPoints = Array.isArray(metrics.heatmap_points) ? metrics.heatmap_points : [];
       const recentHeatmapPoints = heatmapPoints.slice(-120);
 
@@ -421,66 +239,73 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
 
     animationFrameId = window.requestAnimationFrame(drawOverlay);
     return () => window.cancelAnimationFrame(animationFrameId);
-  }, [isLoaded, mediaSize, retrySeed, streamMode]);
+  }, [isLive]);
 
   useEffect(() => {
-    function handleResize() {
+    if (camera.status !== "running" || !feedSource) {
+      return undefined;
+    }
+
+    const checkLoaded = () => {
       const image = imageRef.current;
-      if (!image || !image.complete) {
+      if (!image) {
         return;
       }
 
-      setMediaSize({
-        width: image.naturalWidth || 960,
-        height: image.naturalHeight || 540,
-      });
-    }
+      const naturalWidth = image.naturalWidth || 0;
+      const naturalHeight = image.naturalHeight || 0;
+      if (naturalWidth > 0 && naturalHeight > 0) {
+        setMediaSize({
+          width: naturalWidth,
+          height: naturalHeight,
+        });
+      }
+      onStreamManagerLoad();
+    };
 
-    handleResize();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
+    checkLoaded();
+    const interval = setInterval(checkLoaded, 2000);
+    return () => clearInterval(interval);
+  }, [camera.id, camera.status, feedSource, onStreamManagerLoad]);
 
   return (
     <div className="mt-4 space-y-3">
-      <div className={`relative overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,rgba(72,208,193,0.18),transparent_35%),rgba(255,255,255,0.04)] ${compact ? "aspect-video" : "h-[38rem]"}`}>
+      <div
+        ref={containerRef}
+        className={`relative overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,rgba(72,208,193,0.18),transparent_35%),rgba(255,255,255,0.04)] ${compact ? "aspect-video" : "h-[38rem]"}`}
+      >
         {camera.status === "running" && feedSource ? (
           <>
             <img
-              key={feedSource}
               ref={imageRef}
               alt={`${camera.zoneName} live feed`}
+              fetchPriority="high"
+              decoding="async"
+              loading="eager"
               className={`h-full w-full bg-slate-950 ${compact ? "object-cover" : "object-contain"}`}
               onError={() => {
-                setImageErrored(true);
-                setIsLoaded(false);
-                setStreamStartedAt(Date.now());
-                if (camera.sourceType === "public") {
-                  setStreamResolutionStatus("unresolved");
-                }
+                console.error(`[CameraFeed] Stream image failed to render on DOM: camera=${camera.id}, src=${feedSource}`);
+                onStreamManagerError();
               }}
               onLoad={(event) => {
                 const target = event.currentTarget;
+                const naturalWidth = target.naturalWidth || 960;
+                const naturalHeight = target.naturalHeight || 540;
                 setMediaSize({
-                  width: target.naturalWidth || 960,
-                  height: target.naturalHeight || 540,
+                  width: naturalWidth,
+                  height: naturalHeight,
                 });
-                setIsLoaded(true);
-                setImageErrored(false);
-                setStreamStartedAt(Date.now());
-                if (camera.sourceType === "public") {
-                  setStreamResolutionStatus(streamMode === "preview" ? "fallback_preview" : "direct");
-                }
+                onStreamManagerLoad();
               }}
               src={feedSource}
             />
-            {isLoaded ? (
+            {isLive ? (
               <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
             ) : null}
-            {isLoaded ? (
+            {isLive ? (
               <>
                 <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-full bg-slate-950/70 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-white">
-                  {streamMode === "ai" ? "Live" : "Preview"}
+                  {streamMode === STREAM_MODES.AI ? "Live" : "Preview"}
                 </div>
                 <div className={`pointer-events-none absolute left-3 top-3 z-10 rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${sourceBadge.tone}`}>
                   {sourceBadge.label}
@@ -490,12 +315,12 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
                 </div>
               </>
             ) : null}
-            {streamStatus !== "live" ? (
+            {streamStatus !== STREAM_STATES.LIVE ? (
               <div className="absolute inset-0 flex items-center justify-center bg-slate-950/68">
                 <div className="text-center text-white">
                   <LoaderCircle className="mx-auto h-7 w-7 animate-spin text-teal-300" />
                   <p className="mt-2 text-sm font-medium">
-                    {streamStatus === "reconnecting" ? "Reconnecting..." : "Connecting..."}
+                    {streamStatus === STREAM_STATES.RECONNECTING ? "Reconnecting..." : streamStatus === STREAM_STATES.FALLBACK_PREVIEW ? "Connecting Fallback..." : "Connecting..."}
                   </p>
                   <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-white/55">
                     {sourceBadge.label}
@@ -516,7 +341,6 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
           </div>
         )}
       </div>
-
     </div>
   );
 }

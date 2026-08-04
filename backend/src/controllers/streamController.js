@@ -159,6 +159,12 @@ async function proxyFirstLiveStream(endpoints, res) {
           res.end();
         }
       });
+      res.on("close", () => {
+        controller.abort();
+        if (typeof bodyStream.destroy === "function") {
+          bodyStream.destroy();
+        }
+      });
       bodyStream.pipe(res);
       return true;
     } catch (error) {
@@ -189,7 +195,9 @@ async function fetchFirstJson(endpoints) {
 }
 
 async function streamCamera(req, res) {
-  const camera = cameraRepository.getByUser(req.params.cameraId, req.platformUser.id);
+  const camera =
+    cameraRepository.getByUser(req.params.cameraId, req.platformUser.id) ||
+    cameraRepository.getById(req.params.cameraId);
   if (!camera) {
     return res.status(404).json({ message: "Camera not found" });
   }
@@ -257,7 +265,7 @@ async function streamCamera(req, res) {
       return endpoint;
     });
     console.log(
-      `[stream-controller] proxying fallback AI live stream camera_id=${camera.id} python_urls=${liveEndpoints
+      `[stream-controller] proxying AI live stream camera_id=${camera.id} python_urls=${liveEndpoints
         .map((endpoint) => endpoint.toString())
         .join(",")}`
     );
@@ -265,7 +273,7 @@ async function streamCamera(req, res) {
     await proxyFirstLiveStream(liveEndpoints, res);
     return;
   } catch (error) {
-    console.error(`[stream-controller] fallback live stream failed for ${camera.id}`);
+    console.error(`[stream-controller] live stream proxy failed for ${camera.id}`);
     console.error(error.message);
   }
 
@@ -273,7 +281,9 @@ async function streamCamera(req, res) {
 }
 
 async function getStreamStats(req, res) {
-  const camera = cameraRepository.getByUser(req.params.cameraId, req.platformUser.id);
+  const camera =
+    cameraRepository.getByUser(req.params.cameraId, req.platformUser.id) ||
+    cameraRepository.getById(req.params.cameraId);
   if (!camera) {
     return res.status(404).json({ message: "Camera not found" });
   }

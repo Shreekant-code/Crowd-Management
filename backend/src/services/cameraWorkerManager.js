@@ -359,6 +359,7 @@ class CameraWorkerManager {
     worker.paused = false;
     this.clearWorkerTimer(worker);
     this.workers.delete(id);
+    console.log(`[camera-worker] Worker timers stopped & resources deleted for camera_id=${id}`);
     void stopStreamAnalysis(id);
   }
 

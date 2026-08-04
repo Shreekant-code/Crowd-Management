@@ -23,6 +23,7 @@ export async function GET(_request, { params }) {
       cache: "no-store",
     });
   } catch (error) {
+    console.error("stream_stats_proxy_request_failed", { cameraId, backendUrl, error });
     const message =
       error?.cause?.code === "ECONNREFUSED"
         ? `Backend is unreachable at ${backendUrl}. Start the backend server.`

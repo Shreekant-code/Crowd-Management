@@ -19,6 +19,18 @@ app.use(
   })
 );
 app.use(express.json());
+app.use((req, res, next) => {
+  res.on("finish", () => {
+    if (res.statusCode >= 400) {
+      console.error("api_request_failed", {
+        method: req.method,
+        path: req.originalUrl,
+        statusCode: res.statusCode,
+      });
+    }
+  });
+  next();
+});
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
@@ -32,9 +44,16 @@ app.use("/api/global", requirePlatformAuth, globalRoutes);
 app.use("/api/stream", requirePlatformAuth, streamRoutes);
 app.use("/api/uploads", requirePlatformAuth, uploadRoutes);
 
-app.use((error, _req, res, _next) => {
-  res.status(400).json({
-    message: error.message || "Unexpected server error",
+app.use((error, req, res, _next) => {
+  const statusCode = error.statusCode || error.status || 500;
+  console.error("api_unhandled_error", {
+    method: req.method,
+    path: req.originalUrl,
+    statusCode,
+    error,
+  });
+  res.status(statusCode).json({
+    message: statusCode >= 500 ? "Unexpected server error" : error.message || "Request failed",
   });
 });
 

@@ -20,9 +20,9 @@ export const socketTokenSecret =
   process.env.SOCKET_TOKEN_SECRET || "socket-token-secret-change-me";
 export const pythonServiceUrl = process.env.PYTHON_SERVICE_URL || "http://127.0.0.1:8001";
 export const pythonLiveServiceUrl =
-  process.env.PYTHON_LIVE_SERVICE_URL || "http://127.0.0.1:8002";
+  process.env.PYTHON_LIVE_SERVICE_URL || null;
 export const enablePythonLiveProxy =
-  process.env.ENABLE_PYTHON_LIVE_PROXY !== "false";
+  Boolean(process.env.PYTHON_LIVE_SERVICE_URL && process.env.ENABLE_PYTHON_LIVE_PROXY !== "false");
 export const liveProxyTimeoutMs = Number(process.env.LIVE_PROXY_TIMEOUT_MS || 15000);
 export const aiRequestTimeoutMs = Number(process.env.AI_REQUEST_TIMEOUT_MS || 1500);
 export const aiRetryCount = Number(process.env.AI_RETRY_COUNT || 1);

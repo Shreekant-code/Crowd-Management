@@ -1,3 +1,4 @@
+import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -142,16 +143,26 @@ function parsePlayerResponseFromText(text = "") {
     }
   }
 
-  const manifestMatch = text.match(/"hlsManifestUrl":"([^"]+)"/);
-  if (manifestMatch) {
-    try {
-      return {
-        streamingData: {
-          hlsManifestUrl: JSON.parse(`"${manifestMatch[1]}"`),
-        },
-      };
-    } catch (_error) {
-      // continue
+  const manifestPatterns = [
+    /"hlsManifestUrl":"([^"]+)"/i,
+    /hlsManifestUrl\\u0026?[:=]([^"&,\\s]+)/i,
+    /"streamingData"[^\n]*"hlsManifestUrl":"([^"]+)"/i,
+    /https:\/\/[^"'\s]+\/playlist\/index\.m3u8/i,
+  ];
+
+  for (const pattern of manifestPatterns) {
+    const manifestMatch = text.match(pattern);
+    if (manifestMatch?.[1]) {
+      try {
+        const value = decodeURIComponent(manifestMatch[1]);
+        return {
+          streamingData: {
+            hlsManifestUrl: value,
+          },
+        };
+      } catch (_error) {
+        // continue
+      }
     }
   }
 
@@ -246,6 +257,58 @@ function extractPlayerResponseData(text = "") {
   };
 }
 
+function getPythonCandidates() {
+  const repoRoot = path.resolve(process.cwd(), "..");
+  const pythonCandidates = [
+    process.env.PYTHON,
+    process.env.PYTHON_EXECUTABLE,
+    process.env.PYTHON_PATH,
+    process.platform === "win32"
+      ? path.resolve(repoRoot, ".venv", "Scripts", "python.exe")
+      : path.resolve(repoRoot, ".venv", "bin", "python"),
+    "python",
+    "python3",
+  ];
+
+  return Array.from(new Set(pythonCandidates.filter(Boolean)));
+}
+
+async function tryResolveWithPythonYtDlp(targetUrl) {
+  const pythonCandidates = getPythonCandidates();
+  const commonArgs = [
+    "-m",
+    "yt_dlp",
+    "--no-warnings",
+    "--no-playlist",
+    "--skip-download",
+    "--get-url",
+    "--format",
+    "best[protocol^=m3u8]/best",
+    targetUrl,
+  ];
+
+  for (const pythonBinary of pythonCandidates) {
+    try {
+      const { stdout } = await execFileAsync(pythonBinary, commonArgs, {
+        timeout: 12000,
+        maxBuffer: 1024 * 1024,
+        windowsHide: true,
+      });
+      const candidate = String(stdout || "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean);
+      if (candidate) {
+        return candidate;
+      }
+    } catch (_error) {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 async function tryResolveWithYtDlp(videoUrl = "") {
   const targetUrl = String(videoUrl || "").trim();
   if (!targetUrl) {
@@ -281,7 +344,7 @@ async function tryResolveWithYtDlp(videoUrl = "") {
     }
   }
 
-  return null;
+  return tryResolveWithPythonYtDlp(targetUrl);
 }
 
 async function fetchYoutubePlayerData(videoId) {
@@ -291,6 +354,15 @@ async function fetchYoutubePlayerData(videoId) {
 
   if (playerResponse?.streamingData?.hlsManifestUrl) {
     return playerResponse;
+  }
+
+  const pageManifestMatch = watchPage.match(/https:\/\/[^"'\s]+\/playlist\/index\.m3u8/i);
+  if (pageManifestMatch?.[0]) {
+    return {
+      streamingData: {
+        hlsManifestUrl: pageManifestMatch[0],
+      },
+    };
   }
 
   if (innertube.apiKey) {
@@ -365,6 +437,12 @@ async function resolveYouTubeStreamUrl(videoId) {
     const iframeMatch = embedPage.match(/youtube\.com\/embed\/([A-Za-z0-9_-]{6,})/i);
     if (iframeMatch?.[1] && iframeMatch[1] !== videoId) {
       return resolveYouTubeStreamUrl(iframeMatch[1]);
+    }
+
+    const embeddedManifestMatch = embedPage.match(/https:\/\/[^"'\s]+\/playlist\/index\.m3u8/i);
+    if (embeddedManifestMatch?.[0]) {
+      resolveCache.set(cacheKey, { cachedAt: Date.now(), value: embeddedManifestMatch[0] });
+      return embeddedManifestMatch[0];
     }
 
     throw new Error(`Unable to resolve YouTube stream URL for video ${videoId} from ${watchUrl}`);

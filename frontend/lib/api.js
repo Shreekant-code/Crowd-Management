@@ -5,11 +5,14 @@ async function parseResponse(response) {
     data = await response.json();
   } catch (_error) {
     data = { message: "Server returned an unreadable response" };
+    console.error("frontend_api_response_parse_failed", _error);
   }
 
   if (!response.ok) {
     const detail = data.error ? ` ${data.error}` : "";
-    throw new Error(`${data.message || "Request failed"}${detail}`.trim());
+    const error = new Error(`${data.message || "Request failed"}${detail}`.trim());
+    console.error("frontend_api_response_failed", { status: response.status, error });
+    throw error;
   }
 
   return data;

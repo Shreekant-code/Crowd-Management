@@ -32,7 +32,8 @@ io.use((socket, next) => {
     const payload = jwt.verify(token, socketTokenSecret);
     socket.platformUser = payload;
     next();
-  } catch (_error) {
+  } catch (error) {
+    console.error("socket_authentication_failed", { socketId: socket.id, error });
     next(new Error("Invalid socket token"));
   }
 });
@@ -40,6 +41,22 @@ io.use((socket, next) => {
 io.on("connection", (socket) => {
   socket.join(`user:${socket.platformUser.id}`);
   socket.emit("connected", { id: socket.id, connectedAt: new Date().toISOString() });
+  socket.on("error", (error) => {
+    console.error("socket_client_error", { socketId: socket.id, userId: socket.platformUser.id, error });
+  });
+  socket.on("disconnect", (reason) => {
+    if (reason !== "client namespace disconnect") {
+      console.error("socket_disconnected", { socketId: socket.id, userId: socket.platformUser.id, reason });
+    }
+  });
+});
+
+io.engine.on("connection_error", (error) => {
+  console.error("socket_connection_error", {
+    code: error.code,
+    message: error.message,
+    context: error.context,
+  });
 });
 
 function shutdown(code = 0) {

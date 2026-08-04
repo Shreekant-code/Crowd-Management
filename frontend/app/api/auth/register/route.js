@@ -16,6 +16,7 @@ export async function POST(request) {
       },
     });
   } catch (error) {
+    console.error("registration_api_failed", error);
     if (error.name === "ZodError") {
       return NextResponse.json({ message: error.issues[0]?.message || "Invalid input" }, { status: 400 });
     }

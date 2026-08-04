@@ -1,12 +1,24 @@
+import asyncio
+import logging
+import os
+import sys
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import cv2
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("crowd-ai-service")
+
+SERVICE_ROOT = os.path.dirname(os.path.abspath(__file__))
+if SERVICE_ROOT not in sys.path:
+    sys.path.insert(0, SERVICE_ROOT)
 
 from detector import PersonDetector
 from tracker import PersonTracker
@@ -57,7 +69,24 @@ def log_pipeline_step(
     print(f"[{source}] camera_id={camera_id} frame_id={frame_id} Tracks: {track_count}")
 
 
-app = FastAPI(title="Crowd Analytics AI Service", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Service started and ready.")
+    yield
+    logger.info("Service shutting down. Stopping active stream processors...")
+    with streams_lock:
+        for camera_id, processor in list(active_streams.items()):
+            try:
+                processor.stop()
+            except Exception as e:
+                logger.exception(f"Error stopping processor for camera {camera_id}: {e}")
+        active_streams.clear()
+    logger.info("Service shutdown complete.")
+    # Force immediate OS process termination so blocking C++ OpenCV network threads do not keep Uvicorn hanging on Ctrl+C
+    os._exit(0)
+
+
+app = FastAPI(title="Crowd Analytics AI Service", version="1.0.0", lifespan=lifespan)
 detector = PersonDetector(model_name=YOLO_MODEL, confidence=YOLO_CONFIDENCE)
 slot_limiter = threading.BoundedSemaphore(MAX_ACTIVE_JOBS)
 jobs_lock = threading.Lock()
@@ -117,13 +146,41 @@ class StreamProcessor:
         self.latest_jpeg: Optional[bytes] = None
         self.last_processed_at: Optional[float] = None
         self.status = "warming_up"
+        self.reader: Optional[LatestFrameCapture] = None
         self.thread = threading.Thread(target=self._run, daemon=True)
+        self._slot_acquired = False
+
+    def acquire_slot(self) -> bool:
+        if self._slot_acquired:
+            return True
+
+        acquired = slot_limiter.acquire(blocking=False)
+        if acquired:
+            self._slot_acquired = True
+        return acquired
+
+    def release_slot(self) -> None:
+        if not self._slot_acquired:
+            return
+
+        self._slot_acquired = False
+        try:
+            slot_limiter.release()
+        except ValueError:
+            logger.warning(f"[stream-lifecycle] Attempted to release a slot for camera {self.camera_id} more than once.")
 
     def start(self) -> None:
+        if not self.acquire_slot():
+            raise RuntimeError("AI service is at concurrency limit")
         self.thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
+        if self.reader is not None:
+            try:
+                self.reader.stop()
+            except Exception:
+                pass
 
     def get_latest(self) -> Optional[Dict[str, Any]]:
         with self.lock:
@@ -151,33 +208,34 @@ class StreamProcessor:
         runtime = CrowdRuntime()
         runtime.reset_for_new_video()
         stream_type = detect_stream_type(self.stream_url)
-        reader = LatestFrameCapture(self.stream_url)
+        self.reader = LatestFrameCapture(self.stream_url)
         frame_index = 0
         processed_frame_id = 0
         frame_interval = 1.0 / max(STREAM_TARGET_FPS, 1.0)
         last_processed_at = 0.0
 
-        reader.start()
+        self.reader.start()
         try:
             while not self.stop_event.is_set():
-                ok, frame = reader.read(timeout=STREAM_RECONNECT_DELAY_SECONDS)
+                ok, frame = self.reader.read(timeout=0.2)
                 if not ok or frame is None:
+                    if self.stop_event.is_set():
+                        break
                     self.status = "reconnecting"
-                    print(
-                        f"[stream-loader] frame read failed camera_id={self.camera_id} "
-                        f"type={stream_type} attempt={reader.reconnect_attempt}"
-                    )
-                    time.sleep(0.05)
+                    if self.stop_event.wait(timeout=0.05):
+                        break
                     continue
 
                 now = time.perf_counter()
                 if now - last_processed_at < frame_interval:
-                    time.sleep(0.001)
+                    if self.stop_event.wait(timeout=0.001):
+                        break
                     continue
 
                 frame_index += 1
                 if FRAME_SKIP > 1 and frame_index % FRAME_SKIP != 0:
-                    time.sleep(0.001)
+                    if self.stop_event.wait(timeout=0.001):
+                        break
                     continue
 
                 processed_frame_id += 1
@@ -216,12 +274,18 @@ class StreamProcessor:
                     self.last_processed_at = last_processed_at
                     self.status = "running"
         finally:
-            reader.stop()
+            with self.lock:
+                self.status = "completed" if not self.stop_event.is_set() else "stopped"
+            if self.reader is not None:
+                self.reader.stop()
             runtime.shutdown()
-            slot_limiter.release()
+            self.release_slot()
             with streams_lock:
-                if self.stop_event.is_set():
-                    active_streams.pop(self.camera_id, None)
+                active_streams.pop(self.camera_id, None)
+            logger.info(
+                f"[stream-lifecycle] Camera {self.camera_id} video processing {self.status}. "
+                f"Resources released & worker slot freed."
+            )
 
 
 def _get_or_create_stream_processor(camera_id: str, stream_url: str, user_id: Optional[str] = None, zone_name: Optional[str] = None) -> StreamProcessor:
@@ -267,12 +331,17 @@ def process_file_job(job_id: str, request: FileJobRequest) -> None:
             jobs[job_id] = payload
 
         if request.callback is not None:
-            post_callback(request.callback.url, payload, request.callback.headers)
-    except Exception as exc:
+            try:
+                post_callback(request.callback.url, payload, request.callback.headers)
+            except Exception:
+                pass
+
+        logger.info(f"[job-lifecycle] File job {job_id} processing completed successfully. Resources released.")
+    except Exception as error:
         failure = {
             "job_id": job_id,
             "status": "failed",
-            "error": str(exc),
+            "error": str(error),
             "completed_at": utc_now(),
         }
         with jobs_lock:
@@ -347,9 +416,6 @@ def start_stream(request: StreamStartRequest) -> Dict[str, Any]:
                 "started_at": utc_now(),
             }
 
-        if not slot_limiter.acquire(blocking=False):
-            raise HTTPException(status_code=429, detail="AI service is at concurrency limit")
-
         processor = StreamProcessor(
             camera_id=request.camera_id,
             stream_url=request.stream_url,
@@ -358,7 +424,14 @@ def start_stream(request: StreamStartRequest) -> Dict[str, Any]:
         )
         active_streams[request.camera_id] = processor
 
-    processor.start()
+    try:
+        processor.start()
+    except RuntimeError:
+        with streams_lock:
+            active_streams.pop(request.camera_id, None)
+        raise HTTPException(status_code=429, detail="AI service is at concurrency limit")
+
+    logger.info(f"[stream-lifecycle] Stream processing started for camera_id={request.camera_id}")
     return {
         "camera_id": request.camera_id,
         "status": "processing_started",
@@ -368,6 +441,7 @@ def start_stream(request: StreamStartRequest) -> Dict[str, Any]:
 
 @app.post("/streams/stop")
 def stop_stream(request: StreamStopRequest) -> Dict[str, Any]:
+    logger.info(f"[stream-lifecycle] Received stop request for camera_id={request.camera_id}")
     with streams_lock:
         processor = active_streams.get(request.camera_id)
 
@@ -375,12 +449,35 @@ def stop_stream(request: StreamStopRequest) -> Dict[str, Any]:
         processor.stop()
         with streams_lock:
             active_streams.pop(request.camera_id, None)
+        logger.info(f"[stream-lifecycle] Camera {request.camera_id} stream processor stopped & active stream memory released.")
 
     return {
         "camera_id": request.camera_id,
-        "status": "stopping",
+        "status": "stopped",
         "timestamp": utc_now(),
     }
+
+
+def _generate_warmup_placeholder_jpeg(width: int = 640, height: int = 360) -> bytes:
+    try:
+        import numpy as np
+        img = np.zeros((height, width, 3), dtype=np.uint8)
+        img[:] = (30, 24, 15)
+        cv2.putText(img, "INITIALIZING AI STREAM...", (140, 190), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
+        _, buf = cv2.imencode(".jpg", img)
+        return buf.tobytes()
+    except Exception:
+        return (
+            b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+            b"\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c"
+            b"\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c"
+            b"\x1c $.' \",#\x1c\x1c(7),01444\x1f'9=82<.342\xff\xc0\x00\x0b\x08\x00"
+            b"\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01"
+            b"\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05"
+            b"\x06\x07\x08\t\n\x0b\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xbf\x00\xff\xd9"
+        )
+
+_WARMUP_PLACEHOLDER_JPEG = _generate_warmup_placeholder_jpeg()
 
 
 @app.get("/live")
@@ -404,21 +501,27 @@ def live(
 
     def stream_generator():
         last_frame_bytes = None
-        while not processor.stop_event.is_set():
-            with processor.lock:
-                latest_jpeg = processor.latest_jpeg
-                status = processor.status
+        try:
+            while not processor.stop_event.is_set():
+                with processor.lock:
+                    latest_jpeg = processor.latest_jpeg
 
-            if latest_jpeg and latest_jpeg != last_frame_bytes:
-                last_frame_bytes = latest_jpeg
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + latest_jpeg + b"\r\n"
-                )
-            elif status in {"reconnecting", "warming_up"}:
-                time.sleep(0.05)
-            else:
-                time.sleep(0.03)
+                if latest_jpeg and latest_jpeg != last_frame_bytes:
+                    last_frame_bytes = latest_jpeg
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + latest_jpeg + b"\r\n"
+                    )
+                    time.sleep(0.03)
+                else:
+                    frame_to_send = last_frame_bytes or _WARMUP_PLACEHOLDER_JPEG
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + frame_to_send + b"\r\n"
+                    )
+                    time.sleep(0.08)
+        except (GeneratorExit, asyncio.CancelledError):
+            pass
 
     return StreamingResponse(
         stream_generator(),
@@ -446,21 +549,32 @@ def camera_live(
 
     def stream_generator():
         last_frame_bytes = None
-        while not processor.stop_event.is_set():
-            with processor.lock:
-                latest_jpeg = processor.latest_jpeg
-                status = processor.status
+        has_sent_initial = False
+        try:
+            while not processor.stop_event.is_set():
+                with processor.lock:
+                    latest_jpeg = processor.latest_jpeg
+                    status = processor.status
 
-            if latest_jpeg and latest_jpeg != last_frame_bytes:
-                last_frame_bytes = latest_jpeg
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + latest_jpeg + b"\r\n"
-                )
-            elif status in {"reconnecting", "warming_up"}:
-                time.sleep(0.05)
-            else:
-                time.sleep(0.03)
+                if latest_jpeg and latest_jpeg != last_frame_bytes:
+                    last_frame_bytes = latest_jpeg
+                    has_sent_initial = True
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + latest_jpeg + b"\r\n"
+                    )
+                elif not has_sent_initial:
+                    has_sent_initial = True
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + _WARMUP_PLACEHOLDER_JPEG + b"\r\n"
+                    )
+                elif status in {"reconnecting", "warming_up"}:
+                    time.sleep(0.05)
+                else:
+                    time.sleep(0.03)
+        except (GeneratorExit, asyncio.CancelledError):
+            pass
 
     return StreamingResponse(
         stream_generator(),

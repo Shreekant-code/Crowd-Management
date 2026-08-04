@@ -4,6 +4,7 @@ async function parseResponse(response) {
   const data = await response.json();
 
   if (!response.ok) {
+    console.error("platform_backend_response_failed", { pathname, status: response.status, data });
     if (response.status === 401 && data.message === "Unauthorized platform request") {
       throw new Error(
         "Frontend and backend secrets do not match. Set the same PLATFORM_API_SECRET in frontend/.env.local and backend/.env."
@@ -31,6 +32,7 @@ export async function platformFetch(pathname, session, options = {}) {
       cache: "no-store",
     });
   } catch (error) {
+    console.error("platform_backend_request_failed", { pathname, backendUrl, error });
     const reason =
       error?.cause?.code === "ECONNREFUSED"
         ? `Backend is unreachable at ${backendUrl}. Start the Express server and try again.`
