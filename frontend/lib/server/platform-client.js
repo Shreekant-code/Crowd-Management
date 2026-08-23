@@ -1,7 +1,12 @@
 import { backendUrl, platformApiSecret } from "@/lib/server/platform-env";
 
-async function parseResponse(response) {
-  const data = await response.json();
+async function parseResponse(response, pathname = "") {
+  let data;
+  try {
+    data = await response.json();
+  } catch (_err) {
+    data = { message: `Server returned status ${response.status}` };
+  }
 
   if (!response.ok) {
     console.error("platform_backend_response_failed", { pathname, status: response.status, data });
@@ -11,7 +16,7 @@ async function parseResponse(response) {
       );
     }
 
-    throw new Error(data.message || "Platform request failed");
+    throw new Error(data.message || `Platform request failed with status ${response.status}`);
   }
 
   return data;
@@ -41,5 +46,5 @@ export async function platformFetch(pathname, session, options = {}) {
     throw new Error(reason);
   }
 
-  return parseResponse(response);
+  return parseResponse(response, pathname);
 }

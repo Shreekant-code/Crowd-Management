@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import numpy as np
 
@@ -29,6 +29,15 @@ def compute_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:
         return 0.0
 
     return intersection / union
+
+
+def _get_bbox_xyxy(item: Dict[str, Any]) -> List[float]:
+    if "bbox_xyxy" in item:
+        return item["bbox_xyxy"]
+    if "bbox" in item:
+        x, y, w, h = item["bbox"]
+        return [float(x), float(y), float(x + w), float(y + h)]
+    return [0.0, 0.0, 0.0, 0.0]
 
 
 class PersonTracker:
@@ -62,7 +71,7 @@ class PersonTracker:
         else:
             self.bytetrack = None
 
-    def update(self, detections: List[Dict[str, float]]) -> List[Dict[str, int]]:
+    def update(self, detections: List[Dict[str, Any]]) -> List[Dict[str, int]]:
         if self.bytetrack is not None:
             try:
                 return self._update_bytetrack(detections)
@@ -72,7 +81,7 @@ class PersonTracker:
 
         return self._update_fallback(detections)
 
-    def _update_bytetrack(self, detections: List[Dict[str, float]]) -> List[Dict[str, int]]:
+    def _update_bytetrack(self, detections: List[Dict[str, Any]]) -> List[Dict[str, int]]:
         if not detections:
             empty_xyxy = np.empty((0, 4), dtype=np.float32)
             empty_conf = np.empty((0,), dtype=np.float32)
@@ -85,8 +94,8 @@ class PersonTracker:
             )
             return self._serialize_supervision(tracked)
 
-        xyxy = np.array([item["bbox_xyxy"] for item in detections], dtype=np.float32)
-        confidence = np.array([item["confidence"] for item in detections], dtype=np.float32)
+        xyxy = np.array([_get_bbox_xyxy(item) for item in detections], dtype=np.float32)
+        confidence = np.array([item.get("confidence", 0.5) for item in detections], dtype=np.float32)
         class_id = np.zeros((len(detections),), dtype=np.int32)
         tracked = self.bytetrack.update_with_detections(
             sv.Detections(xyxy=xyxy, confidence=confidence, class_id=class_id)
@@ -127,15 +136,15 @@ class PersonTracker:
             print(f"[tracker] tracked_ids={[item['id'] for item in items]}")
         return items
 
-    def _update_fallback(self, detections: List[Dict[str, float]]) -> List[Dict[str, int]]:
+    def _update_fallback(self, detections: List[Dict[str, Any]]) -> List[Dict[str, int]]:
         if not detections:
             for track in self.tracks:
                 track["misses"] = int(track.get("misses", 0)) + 1
             self.tracks = [track for track in self.tracks if int(track.get("misses", 0)) <= 12]
             return []
 
-        detection_boxes = np.array([item["bbox_xyxy"] for item in detections], dtype=np.float32)
-        detection_scores = np.array([item["confidence"] for item in detections], dtype=np.float32)
+        detection_boxes = np.array([_get_bbox_xyxy(item) for item in detections], dtype=np.float32)
+        detection_scores = np.array([item.get("confidence", 0.5) for item in detections], dtype=np.float32)
 
         matches: List[tuple[int, int]] = []
         unmatched_tracks = set(range(len(self.tracks)))

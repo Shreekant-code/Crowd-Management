@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { LoaderCircle, VideoOff } from "lucide-react";
+import { LoaderCircle, VideoOff, AlertCircle } from "lucide-react";
 import { useStreamManager, STREAM_STATES, STREAM_MODES } from "@/lib/stream-manager";
 import { WhepClient } from "@/lib/whep-client";
 
@@ -62,6 +62,7 @@ function getDetectionBox(detection = {}) {
 
 export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
   const videoRef = useRef(null);
+  const imageRef = useRef(null);
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const boundsRef = useRef({ width: 960, height: 540, videoWidth: 960, videoHeight: 540 });
@@ -71,7 +72,9 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
     status: streamStatus,
     setStatus: setStreamStatus,
     streamMode,
+    setStreamMode,
     whepUrl,
+    feedSource,
     liveMetrics,
     sourceBadge,
   } = useStreamManager({ camera, onLiveMetricsChange });
@@ -122,11 +125,15 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
     const updateBounds = () => {
       const rect = container.getBoundingClientRect();
       const video = videoRef.current;
+      const img = imageRef.current;
+      const vw = video?.videoWidth || img?.naturalWidth || 960;
+      const vh = video?.videoHeight || img?.naturalHeight || 540;
+
       boundsRef.current = {
         width: Math.max(Math.round(rect.width), 1),
         height: Math.max(Math.round(rect.height), 1),
-        videoWidth: video?.videoWidth || 960,
-        videoHeight: video?.videoHeight || 540,
+        videoWidth: vw,
+        videoHeight: vh,
       };
     };
 
@@ -139,8 +146,10 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
 
   // WebRTC WHEP connection lifecycle with React 19 Strict Mode protection
   useEffect(() => {
-    if (!isRunning || !whepUrl) {
-      setStreamStatus(STREAM_STATES.IDLE);
+    if (!isRunning || !whepUrl || streamMode !== STREAM_MODES.WEBRTC) {
+      if (streamMode !== STREAM_MODES.PREVIEW && streamMode !== STREAM_MODES.AI) {
+        setStreamStatus(STREAM_STATES.IDLE);
+      }
       return undefined;
     }
 
@@ -160,20 +169,29 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
         } else if (newState === "reconnecting") {
           setStreamStatus(STREAM_STATES.RECONNECTING);
         } else if (newState === "failed") {
-          setStreamStatus(STREAM_STATES.FAILED);
+          // If WebRTC fails while camera is running, fallback to direct preview
+          if (isSubscribed && isRunning) {
+            console.warn(`[CameraFeed] WebRTC failed for camera ${camera.id}, switching to Preview mode.`);
+            setStreamMode(STREAM_MODES.PREVIEW);
+            setStreamStatus(STREAM_STATES.FALLBACK_PREVIEW);
+          } else {
+            setStreamStatus(STREAM_STATES.IDLE);
+          }
         } else {
           setStreamStatus(STREAM_STATES.IDLE);
         }
       },
       onError: (err) => {
-        if (!isSubscribed) return;
+        if (!isSubscribed || !isRunning) return;
         console.warn(`[CameraFeed] WHEP connection warning for camera ${camera.id}:`, err?.message);
       },
     });
 
     client.connect(video).catch((err) => {
-      if (isSubscribed) {
+      if (isSubscribed && isRunning) {
         console.warn(`[CameraFeed] WebRTC failed to connect: ${err?.message}`);
+        setStreamMode(STREAM_MODES.PREVIEW);
+        setStreamStatus(STREAM_STATES.FALLBACK_PREVIEW);
       }
     });
 
@@ -184,9 +202,9 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
         video.srcObject = null;
       }
     };
-  }, [camera.id, isRunning, whepUrl, setStreamStatus]);
+  }, [camera.id, isRunning, whepUrl, streamMode, setStreamStatus, setStreamMode]);
 
-  const isLive = streamStatus === STREAM_STATES.LIVE;
+  const isLive = streamStatus === STREAM_STATES.LIVE || streamStatus === STREAM_STATES.FALLBACK_PREVIEW;
 
   // 60 FPS HTML5 Canvas Overlay rendering loop with Track-ID LERP
   useEffect(() => {
@@ -206,9 +224,10 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
     const drawOverlay = () => {
       const now = performance.now();
       const video = videoRef.current;
+      const img = imageRef.current;
       const { width, height } = boundsRef.current;
-      const videoWidth = video?.videoWidth || boundsRef.current.videoWidth || 960;
-      const videoHeight = video?.videoHeight || boundsRef.current.videoHeight || 540;
+      const videoWidth = video?.videoWidth || img?.naturalWidth || boundsRef.current.videoWidth || 960;
+      const videoHeight = video?.videoHeight || img?.naturalHeight || boundsRef.current.videoHeight || 540;
       const dpr = window.devicePixelRatio || 1;
 
       if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
@@ -287,7 +306,6 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
       context.font = "12px sans-serif";
 
       for (const [trackId, state] of trackStatesRef.current.entries()) {
-        // Drop stale tracks
         if (now - state.lastSeen > 1200) {
           trackStatesRef.current.delete(trackId);
           continue;
@@ -304,13 +322,11 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
         const boxWidth = w * scaleX;
         const boxHeight = h * scaleY;
 
-        // Bounding box frame & background tint
         context.strokeStyle = accent.stroke;
         context.fillStyle = accent.fill;
         context.strokeRect(left, top, boxWidth, boxHeight);
         context.fillRect(left, top, boxWidth, boxHeight);
 
-        // Track ID & Confidence Pill
         const label = `ID: ${trackId}`;
         const textWidth = context.measureText(label).width;
         context.fillStyle = accent.chip;
@@ -334,27 +350,46 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
       >
         {isRunning ? (
           <>
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className={`h-full w-full bg-slate-950 ${compact ? "object-cover" : "object-contain"}`}
-              onLoadedMetadata={() => {
-                const video = videoRef.current;
-                if (video) {
-                  boundsRef.current.videoWidth = video.videoWidth || 960;
-                  boundsRef.current.videoHeight = video.videoHeight || 540;
-                }
-              }}
-            />
+            {streamMode === STREAM_MODES.WEBRTC ? (
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className={`h-full w-full bg-slate-950 ${compact ? "object-cover" : "object-contain"}`}
+                onLoadedMetadata={() => {
+                  const video = videoRef.current;
+                  if (video) {
+                    boundsRef.current.videoWidth = video.videoWidth || 960;
+                    boundsRef.current.videoHeight = video.videoHeight || 540;
+                  }
+                }}
+              />
+            ) : (
+              <img
+                ref={imageRef}
+                src={feedSource}
+                alt={camera.name || "Live Stream Preview"}
+                className={`h-full w-full bg-slate-950 ${compact ? "object-cover" : "object-contain"}`}
+                onLoad={() => {
+                  setStreamStatus(STREAM_STATES.FALLBACK_PREVIEW);
+                  const img = imageRef.current;
+                  if (img) {
+                    boundsRef.current.videoWidth = img.naturalWidth || 960;
+                    boundsRef.current.videoHeight = img.naturalHeight || 540;
+                  }
+                }}
+              />
+            )}
+
             {isLive ? (
               <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
             ) : null}
+
             {isLive ? (
               <>
                 <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-full bg-slate-950/70 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-white">
-                  WebRTC Live
+                  {streamMode === STREAM_MODES.WEBRTC ? "WebRTC Live" : "Direct Live Feed"}
                 </div>
                 <div className={`pointer-events-none absolute left-3 top-3 z-10 rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${sourceBadge.tone}`}>
                   {sourceBadge.label}
@@ -369,14 +404,15 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
                 </div>
               </>
             ) : null}
-            {streamStatus !== STREAM_STATES.LIVE ? (
+
+            {streamStatus === STREAM_STATES.CONNECTING || streamStatus === STREAM_STATES.RECONNECTING ? (
               <div className="absolute inset-0 flex items-center justify-center bg-slate-950/68">
                 <div className="text-center text-white">
                   <LoaderCircle className="mx-auto h-7 w-7 animate-spin text-teal-300" />
                   <p className="mt-2 text-sm font-medium">
                     {streamStatus === STREAM_STATES.RECONNECTING
-                      ? "Reconnecting WebRTC..."
-                      : "Connecting WebRTC Stream..."}
+                      ? "Reconnecting Stream..."
+                      : "Connecting Stream..."}
                   </p>
                   <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-white/55">
                     {sourceBadge.label}
@@ -389,7 +425,7 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
           <div className="flex h-full items-center justify-center">
             <div className="text-center text-white">
               <VideoOff className="mx-auto h-8 w-8 text-white/70" />
-              <p className="mt-2 text-sm text-white/70">Start camera to view live WebRTC feed</p>
+              <p className="mt-2 text-sm text-white/70">Start camera to view live feed</p>
               <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-white/55">
                 {sourceBadge.label}
               </p>

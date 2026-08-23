@@ -9,6 +9,7 @@ import {
 } from "../config/env.js";
 import { resolveSourceInput } from "../utils/sourceResolver.js";
 import { detectSourceType, normalizeSourceUrl } from "../utils/videoSource.js";
+import { isIngestibleSource, getLocalRtspUrl, startIngest } from "../services/streamIngestor.js";
 
 const liveStatsFailureLog = new Map();
 
@@ -229,22 +230,28 @@ async function streamCamera(req, res) {
 
   let playableStreamUrl = streamUrl;
   let streamResolutionStatus = getStreamResolutionStatus(streamUrl, camera.sourceType, streamUrl, false);
-  try {
-    const plan = await resolveSourceInput({
-      sourceUrl: streamUrl,
-      sourceType: camera.sourceType,
-    });
-    playableStreamUrl = plan.playableUrl || streamUrl;
-    streamResolutionStatus = getStreamResolutionStatus(
-      streamUrl,
-      camera.sourceType,
-      playableStreamUrl,
-      Boolean(plan.playableUrl && plan.playableUrl !== streamUrl),
-      camera.metrics?.stream_resolution_status
-    );
-  } catch (error) {
-    console.error(`[stream-controller] stream resolution failed for ${camera.id}`);
-    console.error(error.message);
+  if (isIngestibleSource(streamUrl)) {
+    startIngest(camera.id, streamUrl);
+    playableStreamUrl = getLocalRtspUrl(camera.id);
+    streamResolutionStatus = "youtube_resolved";
+  } else {
+    try {
+      const plan = await resolveSourceInput({
+        sourceUrl: streamUrl,
+        sourceType: camera.sourceType,
+      });
+      playableStreamUrl = plan.playableUrl || streamUrl;
+      streamResolutionStatus = getStreamResolutionStatus(
+        streamUrl,
+        camera.sourceType,
+        playableStreamUrl,
+        Boolean(plan.playableUrl && plan.playableUrl !== streamUrl),
+        camera.metrics?.stream_resolution_status
+      );
+    } catch (error) {
+      console.error(`[stream-controller] stream resolution failed for ${camera.id}`);
+      console.error(error.message);
+    }
   }
 
   console.log(
@@ -314,26 +321,32 @@ async function getStreamStats(req, res) {
   }
 
   let playableStreamUrl = streamUrl;
-  try {
-    const plan = await resolveSourceInput({
-      sourceUrl: streamUrl,
-      sourceType: camera.sourceType,
-    });
-    playableStreamUrl = plan.playableUrl || streamUrl;
-  } catch (error) {
-    if (shouldLogLiveStatsFailure(camera.id)) {
-      console.error(`[stream-controller] stream resolution failed for ${camera.id}`);
-      console.error(error.message);
+  let streamResolutionStatus = "direct";
+  if (isIngestibleSource(streamUrl)) {
+    playableStreamUrl = getLocalRtspUrl(camera.id);
+    streamResolutionStatus = "youtube_resolved";
+  } else {
+    try {
+      const plan = await resolveSourceInput({
+        sourceUrl: streamUrl,
+        sourceType: camera.sourceType,
+      });
+      playableStreamUrl = plan.playableUrl || streamUrl;
+    } catch (error) {
+      if (shouldLogLiveStatsFailure(camera.id)) {
+        console.error(`[stream-controller] stream resolution failed for ${camera.id}`);
+        console.error(error.message);
+      }
     }
-  }
 
-  const streamResolutionStatus = getStreamResolutionStatus(
-    streamUrl,
-    camera.sourceType,
-    playableStreamUrl,
-    playableStreamUrl !== streamUrl,
-    camera.metrics?.stream_resolution_status
-  );
+    streamResolutionStatus = getStreamResolutionStatus(
+      streamUrl,
+      camera.sourceType,
+      playableStreamUrl,
+      playableStreamUrl !== streamUrl,
+      camera.metrics?.stream_resolution_status
+    );
+  }
 
   if (enablePythonLiveProxy) {
     try {

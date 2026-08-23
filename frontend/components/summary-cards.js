@@ -58,13 +58,9 @@ function getLiveCount(item = {}) {
     metrics.current_count ??
     metrics.count ??
     metrics.people_count ??
-    metrics.raw_count ??
-    metrics.yolo_count ??
     metrics.final_count ??
     metrics.smoothed_count ??
     0;
 
-  if (count > 0) return count;
-  const seed = String(item?.id || item?.name || "camera").charCodeAt(0) || 5;
-  return (seed % 8) + 5;
+  return Number(count) || 0;
 }

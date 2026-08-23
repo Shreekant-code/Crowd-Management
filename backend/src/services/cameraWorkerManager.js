@@ -8,6 +8,7 @@ import { emitAlert, emitCamera, emitDashboard, emitGlobal } from "./socketHub.js
 import { buildGlobalAnalytics } from "./globalAnalyticsEngine.js";
 import { ensureStreamStarted, stopStreamAnalysis } from "./aiPredictionService.js";
 import { ensureMediaMtxPath, removeMediaMtxPath, getWhepUrl } from "./mediaGateway.js";
+import { getLocalRtspUrl, isIngestibleSource, shutdownAllIngests } from "./streamIngestor.js";
 
 function getRandomCount() {
   return Math.floor(Math.random() * 8) + 5; // 5 to 12
@@ -88,9 +89,13 @@ class CameraWorkerManager {
   }
 
   getResolutionStatusLabel(camera, resolvedUrl) {
+    if (isIngestibleSource(camera?.streamUrl)) {
+      return "youtube_resolved";
+    }
+
     const sourceType = String(camera?.sourceType || "").toLowerCase();
     if (sourceType === "public") {
-      return resolvedUrl && resolvedUrl !== camera.streamUrl ? "youtube_resolved" : "unresolved";
+      return resolvedUrl && resolvedUrl !== camera.streamUrl ? "youtube_resolved" : "resolved";
     }
 
     if (resolvedUrl && resolvedUrl !== camera.streamUrl) {
@@ -122,12 +127,16 @@ class CameraWorkerManager {
       worker.lastResolutionStatus = status;
       worker.lastError = extras.error || null;
       if (extras.resolvedUrl) {
-        worker.lastResolvedStreamUrl = extras.resolvedUrl;
+        worker.lastResolvedStreamUrl = isIngestibleSource(camera.streamUrl)
+          ? getLocalRtspUrl(camera.id)
+          : extras.resolvedUrl;
         worker.lastResolvedAt = Date.now();
-        void ensureMediaMtxPath(camera.id, extras.resolvedUrl);
+        if (camera.status === "running") {
+          void ensureMediaMtxPath(camera.id, camera.streamUrl);
+        }
       }
-    } else if (extras.resolvedUrl) {
-      void ensureMediaMtxPath(camera.id, extras.resolvedUrl);
+    } else if (extras.resolvedUrl && camera.status === "running") {
+      void ensureMediaMtxPath(camera.id, camera.streamUrl);
     }
   }
 
@@ -210,7 +219,7 @@ class CameraWorkerManager {
       });
   }
 
-  scheduleNextRun(id, delay = aiStreamPollIntervalMs) {
+  scheduleNextRun(id, delay = 5000) {
     const worker = this.getWorker(id);
     if (!worker || worker.stopped || worker.paused) {
       return;
@@ -219,10 +228,19 @@ class CameraWorkerManager {
     this.clearWorkerTimer(worker);
     worker.timer = setTimeout(() => {
       void this.runWorkerTick(id);
-    }, Math.max(delay, 50));
+    }, Math.max(delay, 5000));
   }
 
   async resolveCameraStream(camera, worker) {
+    if (isIngestibleSource(camera.streamUrl)) {
+      const localRtsp = getLocalRtspUrl(camera.id);
+      worker.lastResolvedStreamUrl = localRtsp;
+      worker.lastResolvedAt = Date.now();
+      worker.lastResolvedSourceUrl = camera.streamUrl;
+      worker.lastResolvedSourceType = camera.sourceType;
+      return localRtsp;
+    }
+
     const needsRefresh =
       !worker.lastResolvedStreamUrl
       || worker.lastResolvedAt <= 0
@@ -427,14 +445,15 @@ class CameraWorkerManager {
     return camera;
   }
 
-  startCamera(id, userId) {
+  async startCamera(id, userId) {
     const camera = cameraRepository.getByUser(id, userId);
     if (!camera) {
       throw new Error("Camera not found");
     }
 
     const webrtcUrl = getWhepUrl(id);
-    void ensureMediaMtxPath(id, camera.streamUrl);
+    console.log(`[CameraWorker-Debug] Starting camera ${id}, ensuring MediaMTX path...`);
+    await ensureMediaMtxPath(id, camera.streamUrl);
 
     const existingWorker = this.getWorker(id);
     if (existingWorker && !existingWorker.stopped) {
@@ -462,9 +481,13 @@ class CameraWorkerManager {
     const worker = this.createWorkerState(camera);
     this.workers.set(id, worker);
     void this.warmupCameraSource(camera, userId);
+    const aiStreamUrl = isIngestibleSource(camera.streamUrl)
+      ? getLocalRtspUrl(id)
+      : camera.streamUrl;
+
     void ensureStreamStarted({
       cameraId: id,
-      streamUrl: camera.streamUrl,
+      streamUrl: aiStreamUrl,
       userId,
       zoneName: camera.zoneName,
     }).catch((err) => console.warn(`[camera-worker] Could not start AI stream for ${id}: ${err.message}`));
@@ -508,13 +531,13 @@ class CameraWorkerManager {
     return camera;
   }
 
-  resumeCamera(id, userId) {
+  async resumeCamera(id, userId) {
     const camera = cameraRepository.getByUser(id, userId);
     if (!camera) {
       throw new Error("Camera not found");
     }
 
-    void ensureMediaMtxPath(id, camera.streamUrl);
+    await ensureMediaMtxPath(id, camera.streamUrl);
     const worker = this.getWorker(id);
     if (!worker) {
       return this.startCamera(id, userId);
@@ -540,7 +563,7 @@ class CameraWorkerManager {
     return camera;
   }
 
-  restartCamera(id, userId) {
+  async restartCamera(id, userId) {
     this.stopCamera(id, userId);
     return this.startCamera(id, userId);
   }
@@ -582,6 +605,7 @@ class CameraWorkerManager {
     }
     this.workers.clear();
     this.alertCache.clear();
+    shutdownAllIngests();
   }
 
   buildAlertsFromPrediction(prediction, camera, userId) {

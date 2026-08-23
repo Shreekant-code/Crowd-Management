@@ -3,7 +3,7 @@
 /**
  * Robust WHEP (WebRTC HTTP Egress Protocol) Client
  * Connects HTML5 <video> to MediaMTX with complete ICE gathering,
- * Strict-Mode lifecycle cleanup, and session teardown support.
+ * progressive on-demand retry backoff, Strict-Mode lifecycle cleanup, and session teardown.
  */
 export class WhepClient {
   constructor({ url, onStateChange, onError }) {
@@ -14,9 +14,10 @@ export class WhepClient {
     this.sessionUrl = null;
     this.isClosed = false;
     this.connectionTimeout = null;
+    this.retryTimeout = null;
   }
 
-  async connect(videoElement) {
+  async connect(videoElement, attempt = 1, maxAttempts = 4) {
     if (!this.url || !videoElement) {
       throw new Error("WHEP client requires a valid endpoint URL and video element.");
     }
@@ -24,8 +25,10 @@ export class WhepClient {
     this.isClosed = false;
     this.onStateChange("connecting");
 
+    console.log(`[WHEP-Debug] Initiating connection to: ${this.url} (Attempt ${attempt}/${maxAttempts})`);
+
     try {
-      // 1. Create WebRTC Peer Connection with public STUN server
+      // 1. Create WebRTC Peer Connection with public STUN servers
       const pc = new RTCPeerConnection({
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
@@ -39,6 +42,7 @@ export class WhepClient {
       pc.onconnectionstatechange = () => {
         if (this.isClosed) return;
         const state = pc.connectionState;
+        console.log(`[WHEP-Debug] RTCPeerConnection state: ${state}`);
         if (state === "connected") {
           this.onStateChange("live");
         } else if (state === "disconnected" || state === "failed") {
@@ -51,12 +55,12 @@ export class WhepClient {
       // Attach incoming media stream to <video> element
       pc.ontrack = (event) => {
         if (this.isClosed || !videoElement) return;
+        console.log("[WHEP-Debug] Received remote media track:", event.track.kind);
         if (event.streams && event.streams[0]) {
           videoElement.srcObject = event.streams[0];
           videoElement.play().catch(() => {
-            // Autoplay might require muted video
             videoElement.muted = true;
-            videoElement.play().catch((e) => console.warn("[WHEP] Autoplay prevented:", e));
+            videoElement.play().catch((e) => console.warn("[WHEP-Debug] Autoplay prevented:", e));
           });
         }
       };
@@ -68,7 +72,7 @@ export class WhepClient {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      // Edge Case 1: Wait for ICE Gathering to complete before sending SDP Offer to MediaMTX
+      // Wait for ICE Gathering to complete before sending SDP Offer to MediaMTX
       await new Promise((resolve) => {
         if (pc.iceGatheringState === "complete") {
           resolve();
@@ -83,8 +87,6 @@ export class WhepClient {
         };
 
         pc.addEventListener("icegatheringstatechange", checkIceState);
-
-        // Fallback safety timeout (1200ms) in case some network interfaces do not trigger 'complete'
         setTimeout(() => {
           pc.removeEventListener("icegatheringstatechange", checkIceState);
           resolve();
@@ -97,6 +99,7 @@ export class WhepClient {
       }
 
       // 4. POST SDP Offer to MediaMTX WHEP endpoint
+      console.log(`[WHEP-Debug] Sending SDP offer to MediaMTX: ${this.url}`);
       const response = await fetch(this.url, {
         method: "POST",
         headers: {
@@ -105,14 +108,39 @@ export class WhepClient {
         body: pc.localDescription?.sdp || offer.sdp,
       });
 
+      console.log(`[WHEP-Debug] MediaMTX responded with status: ${response.status} ${response.statusText}`);
+
+      // Handle 404 / 503 while MediaMTX on-demand source is warming up
+      if ((response.status === 404 || response.status === 503) && attempt < maxAttempts && !this.isClosed) {
+        console.warn(`[WHEP-Debug] Stream path is warming up in MediaMTX (${response.status}). Retrying in 1200ms...`);
+        pc.close();
+        this.pc = null;
+        await new Promise((res) => {
+          this.retryTimeout = setTimeout(res, 1200);
+        });
+        if (!this.isClosed) {
+          return this.connect(videoElement, attempt + 1, maxAttempts);
+        }
+        return;
+      }
+
       if (!response.ok) {
-        throw new Error(`MediaMTX WHEP request failed with status: ${response.status} ${response.statusText}`);
+        if (this.isClosed) return;
+        const errorText = await response.text().catch(() => "");
+        if (response.status === 404) {
+          console.log(`[WHEP-Debug] Path unavailable or camera stopped (${this.url}).`);
+          this.onStateChange("idle");
+          this.disconnect();
+          return;
+        }
+        throw new Error(`MediaMTX WHEP request failed with status: ${response.status} ${response.statusText} - ${errorText}`);
       }
 
       // Store WHEP resource location header for session termination
       const locationHeader = response.headers.get("Location");
       if (locationHeader) {
         this.sessionUrl = new URL(locationHeader, this.url).toString();
+        console.log(`[WHEP-Debug] WHEP session established at: ${this.sessionUrl}`);
       }
 
       const answerSdp = await response.text();
@@ -127,18 +155,16 @@ export class WhepClient {
         type: "answer",
         sdp: answerSdp,
       });
+      console.log("[WHEP-Debug] Remote SDP Answer applied successfully.");
     } catch (error) {
       if (this.isClosed) return;
-      console.error("[WHEP] Connection failed:", error);
+      console.warn(`[WHEP-Debug] Connection ended: ${error.message}`);
       this.onError(error);
       this.onStateChange("failed");
       this.disconnect();
     }
   }
 
-  /**
-   * Edge Case 3: Rigorous Strict-Mode and Component Teardown Cleanup
-   */
   disconnect() {
     this.isClosed = true;
 
@@ -147,15 +173,15 @@ export class WhepClient {
       this.connectionTimeout = null;
     }
 
-    // Send WHEP DELETE request to release server-side WebRTC session immediately
+    if (this.retryTimeout) {
+      clearTimeout(this.retryTimeout);
+      this.retryTimeout = null;
+    }
+
     if (this.sessionUrl) {
       const deleteUrl = this.sessionUrl;
       this.sessionUrl = null;
-      try {
-        fetch(deleteUrl, { method: "DELETE", mode: "no-cors" }).catch(() => {});
-      } catch (_e) {
-        // Ignore network errors on unload
-      }
+      fetch(deleteUrl, { method: "DELETE", mode: "no-cors" }).catch(() => {});
     }
 
     if (this.pc) {
@@ -164,8 +190,8 @@ export class WhepClient {
         this.pc.ontrack = null;
         this.pc.onicegatheringstatechange = null;
         this.pc.close();
-      } catch (err) {
-        console.warn("[WHEP] Error closing RTCPeerConnection:", err);
+      } catch (_err) {
+        // ignore closing errors
       }
       this.pc = null;
     }

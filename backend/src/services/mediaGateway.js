@@ -1,12 +1,8 @@
 import { mediaMtxApiUrl, mediaMtxWhepBaseUrl, enableMediaMtx } from "../config/env.js";
+import { resolvePlayableStreamUrl } from "../utils/liveStreamResolver.js";
+import streamIngestor, { isIngestibleSource, getMediaMtxPathName } from "./streamIngestor.js";
 
-/**
- * Normalizes camera ID into a valid MediaMTX path name
- */
-export function getMediaMtxPathName(cameraId) {
-  const safeId = String(cameraId || "").replace(/[^a-zA-Z0-9_-]/g, "_");
-  return `cam_${safeId}`;
-}
+export { getMediaMtxPathName };
 
 /**
  * Resolves the WHEP WebRTC playback URL for a given camera ID
@@ -17,15 +13,55 @@ export function getWhepUrl(cameraId) {
 }
 
 /**
- * Registers or updates a camera stream path in MediaMTX via its REST Control API
+ * Checks if a URL is a direct media source that MediaMTX can ingest (RTSP, RTMP, direct HTTP)
+ */
+function isDirectMediaStream(url = "") {
+  const lower = url.toLowerCase();
+  if (lower.startsWith("rtsp://") || lower.startsWith("rtsps://") || lower.startsWith("rtmp://")) {
+    return true;
+  }
+  if (lower.includes(".m3u8") || lower.includes("/playlist") || lower.includes("/manifest")) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Registers or updates a camera stream path in MediaMTX or launches intermediate ingest
  */
 export async function ensureMediaMtxPath(cameraId, sourceUrl) {
   if (!enableMediaMtx || !cameraId || !sourceUrl) {
+    console.warn(`[MediaGateway-Debug] Skipping registration: enableMediaMtx=${enableMediaMtx}, cameraId=${cameraId}, hasSource=${Boolean(sourceUrl)}`);
+    return null;
+  }
+
+  // Handle object or string inputs
+  const rawSource = typeof sourceUrl === "object"
+    ? (sourceUrl.playableUrl || sourceUrl.url || sourceUrl.streamUrl || "")
+    : sourceUrl;
+  let normalizedSource = String(rawSource || "").trim();
+
+  if (!normalizedSource) {
     return null;
   }
 
   const pathName = getMediaMtxPathName(cameraId);
-  const normalizedSource = String(sourceUrl || "").trim();
+
+  // If source is a YouTube webpage, use local streamIngestor worker (yt-dlp -> FFmpeg -> MediaMTX RTSP push)
+  // This avoids MediaMTX pulling directly from YouTube, which causes HTTP 403 Forbidden timeouts.
+  if (isIngestibleSource(normalizedSource)) {
+    console.log(`[MediaGateway-Debug] Routing YouTube source through StreamIngestor for cam_${cameraId}`);
+    
+    // Clean up any stale on-demand path registration in MediaMTX REST API
+    try {
+      await fetch(`${mediaMtxApiUrl}/v3/config/paths/delete/${encodeURIComponent(pathName)}`, { method: "DELETE" });
+    } catch (_e) {
+      // ignore
+    }
+
+    streamIngestor.startIngest(cameraId, normalizedSource);
+    return getWhepUrl(cameraId);
+  }
 
   const addUrl = `${mediaMtxApiUrl}/v3/config/paths/add/${encodeURIComponent(pathName)}`;
   const patchUrl = `${mediaMtxApiUrl}/v3/config/paths/patch/${encodeURIComponent(pathName)}`;
@@ -37,6 +73,8 @@ export async function ensureMediaMtxPath(cameraId, sourceUrl) {
     sourceOnDemandStartTimeout: "10s",
   };
 
+  console.log(`[MediaGateway-Debug] Registering direct path in MediaMTX at ${addUrl} with source: ${normalizedSource.slice(0, 60)}...`);
+
   try {
     const addRes = await fetch(addUrl, {
       method: "POST",
@@ -45,9 +83,12 @@ export async function ensureMediaMtxPath(cameraId, sourceUrl) {
     });
 
     if (addRes.ok || addRes.status === 200 || addRes.status === 201) {
-      console.log(`[MediaGateway] Path registered in MediaMTX: ${pathName} -> ${normalizedSource}`);
+      console.log(`[MediaGateway-Debug] Path registered in MediaMTX: ${pathName}`);
       return getWhepUrl(cameraId);
     }
+
+    const addErrText = await addRes.text().catch(() => "");
+    console.log(`[MediaGateway-Debug] MediaMTX add returned status ${addRes.status}: ${addErrText}`);
 
     // If path already exists, patch/update it
     if (addRes.status === 400 || addRes.status === 409) {
@@ -58,22 +99,32 @@ export async function ensureMediaMtxPath(cameraId, sourceUrl) {
       });
 
       if (patchRes.ok) {
-        console.log(`[MediaGateway] Path updated in MediaMTX: ${pathName} -> ${normalizedSource}`);
+        console.log(`[MediaGateway-Debug] Path updated in MediaMTX: ${pathName}`);
         return getWhepUrl(cameraId);
       }
+
+      const patchErrText = await patchRes.text().catch(() => "");
+      console.log(`[MediaGateway-Debug] MediaMTX patch returned status ${patchRes.status}: ${patchErrText}`);
     }
   } catch (err) {
-    console.warn(`[MediaGateway] Could not connect to MediaMTX at ${mediaMtxApiUrl}: ${err.message}`);
+    console.warn(`[MediaGateway-Debug] Could not connect to MediaMTX at ${mediaMtxApiUrl}: ${err.message}`);
   }
 
   return getWhepUrl(cameraId);
 }
 
 /**
- * Removes a camera stream path from MediaMTX when stopped or deleted
+ * Removes a camera stream path from MediaMTX and stops any active ingest processes
  */
 export async function removeMediaMtxPath(cameraId) {
-  if (!enableMediaMtx || !cameraId) {
+  if (!cameraId) {
+    return;
+  }
+
+  // Stop any active YouTube FFmpeg / yt-dlp ingest processes
+  streamIngestor.stopIngest(cameraId);
+
+  if (!enableMediaMtx) {
     return;
   }
 
@@ -83,9 +134,9 @@ export async function removeMediaMtxPath(cameraId) {
   try {
     const res = await fetch(deleteUrl, { method: "DELETE" });
     if (res.ok) {
-      console.log(`[MediaGateway] Path removed from MediaMTX: ${pathName}`);
+      console.log(`[MediaGateway-Debug] Path removed from MediaMTX: ${pathName}`);
     }
   } catch (err) {
-    console.warn(`[MediaGateway] Failed to delete path from MediaMTX: ${err.message}`);
+    console.warn(`[MediaGateway-Debug] Failed to delete path from MediaMTX: ${err.message}`);
   }
 }

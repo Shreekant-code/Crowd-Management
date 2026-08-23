@@ -6,6 +6,7 @@ import { proxyHttpVideoStream, streamVideoPreview } from "../utils/ffmpeg.js";
 import { liveProxyTimeoutMs, pythonServiceUrl } from "../config/env.js";
 import { resolveSourceInput } from "../utils/sourceResolver.js";
 import { detectSourceType, normalizeSourceUrl } from "../utils/videoSource.js";
+import { isIngestibleSource, getLocalRtspUrl, startIngest } from "../services/streamIngestor.js";
 
 function buildLiveEndpoints(baseUrl, cameraId) {
   return [
@@ -120,7 +121,7 @@ function addCamera(req, res) {
   res.status(201).json({ camera });
 }
 
-function startCamera(req, res) {
+async function startCamera(req, res) {
   try {
     const existing = cameraRepository.getByUser(req.params.id, req.platformUser.id);
     if (!existing) {
@@ -134,7 +135,7 @@ function startCamera(req, res) {
       cameraRepository.save(existing);
     }
 
-    const camera = workerManager.startCamera(req.params.id, req.platformUser.id);
+    const camera = await workerManager.startCamera(req.params.id, req.platformUser.id);
     res.json({ camera });
   } catch (error) {
     res.status(404).json({ message: error.message });
@@ -150,18 +151,18 @@ function pauseCamera(req, res) {
   }
 }
 
-function resumeCamera(req, res) {
+async function resumeCamera(req, res) {
   try {
-    const camera = workerManager.resumeCamera(req.params.id, req.platformUser.id);
+    const camera = await workerManager.resumeCamera(req.params.id, req.platformUser.id);
     res.json({ camera });
   } catch (error) {
     res.status(404).json({ message: error.message });
   }
 }
 
-function restartCamera(req, res) {
+async function restartCamera(req, res) {
   try {
-    const camera = workerManager.restartCamera(req.params.id, req.platformUser.id);
+    const camera = await workerManager.restartCamera(req.params.id, req.platformUser.id);
     res.json({ camera });
   } catch (error) {
     res.status(404).json({ message: error.message });
@@ -186,15 +187,20 @@ async function previewCamera(req, res) {
   res.setHeader("Connection", "keep-alive");
 
   let playableStreamUrl = normalizedStreamUrl;
-  try {
-    const plan = await resolveSourceInput({
-      sourceUrl: normalizedStreamUrl,
-      sourceType: camera.sourceType,
-    });
-    playableStreamUrl = plan.playableUrl || normalizedStreamUrl;
-  } catch (error) {
-    console.error(`[camera-controller] stream resolution failed for ${camera.id}`);
-    console.error(error.message);
+  if (isIngestibleSource(normalizedStreamUrl)) {
+    startIngest(camera.id, normalizedStreamUrl);
+    playableStreamUrl = getLocalRtspUrl(camera.id);
+  } else {
+    try {
+      const plan = await resolveSourceInput({
+        sourceUrl: normalizedStreamUrl,
+        sourceType: camera.sourceType,
+      });
+      playableStreamUrl = plan.playableUrl || normalizedStreamUrl;
+    } catch (error) {
+      console.error(`[camera-controller] stream resolution failed for ${camera.id}`);
+      console.error(error.message);
+    }
   }
 
   if (camera.sourceType === "http" && playableStreamUrl === normalizedStreamUrl) {

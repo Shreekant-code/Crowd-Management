@@ -225,16 +225,22 @@ class GstFrameIngestor:
                 if self.rtsp_url.isdigit():
                     capture = cv2.VideoCapture(int(self.rtsp_url))
                 else:
+                    if self.rtsp_url.startswith("rtsp://"):
+                        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;3000000"
                     capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
 
                 capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+                if not capture.isOpened():
+                    if not self.stop_event.is_set():
+                        time.sleep(max(STREAM_RECONNECT_DELAY_SECONDS, 2.0))
+                    continue
 
                 while not self.stop_event.is_set() and capture.isOpened():
                     now = time.perf_counter()
                     # Hardware Frame Decimation: skip decoding if interval has not elapsed
                     if now - last_grabbed_at < frame_interval:
                         capture.grab()  # Drops frame quickly at hardware buffer level
-                        time.sleep(0.01)
                         continue
 
                     ok, raw_frame = capture.read()
@@ -255,7 +261,7 @@ class GstFrameIngestor:
                     capture.release()
 
             if not self.stop_event.is_set():
-                time.sleep(STREAM_RECONNECT_DELAY_SECONDS)
+                time.sleep(max(STREAM_RECONNECT_DELAY_SECONDS, 2.0))
 
     def read(self, timeout: float = 1.0) -> Tuple[bool, Optional[np.ndarray]]:
         start_time = time.time()

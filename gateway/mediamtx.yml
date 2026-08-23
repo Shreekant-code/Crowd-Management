@@ -12,6 +12,8 @@ apiAddress: 127.0.0.1:9997
 rtsp: yes
 rtspAddress: :8554
 rtspTransports: [tcp, udp]
+readBufferCount: 4096
+writeQueueSize: 4096
 
 # WebRTC Server for browser playback (WHEP)
 webrtc: yes

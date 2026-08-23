@@ -16,7 +16,7 @@ class BatchedHeadDetector:
     1. Primary Stage: Executes YOLOv8n-Head FP16 on a batched tensor (B=1..4, 3, 640, 640).
     2. Vectorized Pre-Filtering: Drops 99% of empty candidate anchors via NumPy boolean masking.
     3. Per-Camera Overlap Analysis: Calculates pairwise head IoU overlap ratio per stream.
-    4. Dynamic Sub-Batch Routing: Sub-batches ONLY cameras exceeding 35% overlap to MobileCount FP16.
+    4. Dynamic Sub-Batch Routing: Sub-batches cameras exceeding overlap threshold to density model.
     5. Inverse Letterboxing: Maps 640x640 letterbox coordinates accurately to original aspect ratio.
     """
 
@@ -123,13 +123,13 @@ class BatchedHeadDetector:
         congested_indices: List[int] = []
         congested_frames: List[np.ndarray] = []
 
-        # 3. Vectorized Pre-Filtering & Per-Camera Overlap Evaluation
+        # 3. Vectorized Pre-Filtering, NMS & Overlap Evaluation
         for i, cam_id in enumerate(camera_ids):
             preds = preds_batch[i]  # Shape (8400, C)
             orig_shape = orig_shapes[i]
 
             # Vectorized Boolean Mask: Extract confidence scores (person/head class index 4)
-            scores = preds[:, 4] if preds.shape[1] == 5 else np.max(preds[:, 4:], axis=1)
+            scores = preds[:, 4] if preds.shape[1] == 5 else preds[:, 4]
             conf_mask = scores > self.conf_threshold
 
             valid_preds = preds[conf_mask]
@@ -160,40 +160,41 @@ class BatchedHeadDetector:
             # Evaluate per-camera crowd overlap
             overlap_ratio = self.calculate_crowd_overlap(boxes_xyxy)
 
+            # Fast OpenCV NMS on candidate slice
+            nms_boxes = [[int(x1[j]), int(y1[j]), int(w[j]), int(h[j])] for j in range(len(x1))]
+            indices = cv2.dnn.NMSBoxes(
+                nms_boxes,
+                valid_scores.tolist(),
+                self.conf_threshold,
+                self.iou_threshold,
+            )
+
+            detections = []
+            if len(indices) > 0:
+                for idx in np.array(indices).flatten():
+                    scaled_box = self.inverse_letterbox(nms_boxes[idx], orig_shape=orig_shape)
+                    x, y, w, h = scaled_box
+                    detections.append({
+                        "id": int(idx),
+                        "bbox": scaled_box,
+                        "bbox_xyxy": [x, y, x + w, y + h],
+                        "bbox_letterbox": nms_boxes[idx],
+                        "confidence": round(float(valid_scores[idx]), 3),
+                    })
+
+            results[cam_id] = {
+                "count": len(detections),
+                "detections": detections,
+                "density_mode": False,
+                "overlap_ratio": round(overlap_ratio, 3),
+                "inference_ms": round(inference_ms / batch_size, 2),
+            }
+
             if overlap_ratio > self.overlap_switch_threshold and self.mobilecount_engine is not None:
-                # Flag this camera for Sub-Batch Density Routing
                 congested_indices.append(i)
                 congested_frames.append(batch_tensor[i])
-            else:
-                # Fast OpenCV NMS on candidate slice
-                nms_boxes = [[int(x1[j]), int(y1[j]), int(w[j]), int(h[j])] for j in range(len(x1))]
-                indices = cv2.dnn.NMSBoxes(
-                    nms_boxes,
-                    valid_scores.tolist(),
-                    self.conf_threshold,
-                    self.iou_threshold,
-                )
 
-                detections = []
-                if len(indices) > 0:
-                    for idx in np.array(indices).flatten():
-                        scaled_box = self.inverse_letterbox(nms_boxes[idx], orig_shape=orig_shape)
-                        detections.append({
-                            "id": int(idx),
-                            "bbox": scaled_box,
-                            "bbox_letterbox": nms_boxes[idx],
-                            "confidence": round(float(valid_scores[idx]), 3),
-                        })
-
-                results[cam_id] = {
-                    "count": len(detections),
-                    "detections": detections,
-                    "density_mode": False,
-                    "overlap_ratio": round(overlap_ratio, 3),
-                    "inference_ms": round(inference_ms / batch_size, 2),
-                }
-
-        # 4. Dynamic Sub-Batch Routing for Congested Cameras
+        # 4. Dynamic Sub-Batch Routing for Congested Cameras (Density refinement)
         if congested_frames and self.mobilecount_engine is not None:
             sub_batch = np.stack(congested_frames, axis=0)  # Shape (N_congested, 3, 640, 640)
             density_outputs = self.mobilecount_engine.infer_batch(sub_batch)
@@ -201,16 +202,15 @@ class BatchedHeadDetector:
             for sub_idx, cam_idx in enumerate(congested_indices):
                 cam_id = camera_ids[cam_idx]
                 d_map = density_outputs[sub_idx].squeeze()
-                head_count = int(round(float(np.sum(d_map))))
+                density_count = int(round(float(np.sum(d_map))))
+                existing_dets = results[cam_id]["detections"]
+                final_count = max(len(existing_dets), density_count)
 
-                results[cam_id] = {
-                    "count": head_count,
-                    "density_count": head_count,
-                    "density_map": d_map,
-                    "density_mode": True,
-                    "overlap_ratio": 1.0,
-                    "detections": [],
-                    "inference_ms": round(inference_ms / batch_size, 2),
-                }
+                results[cam_id]["count"] = final_count
+                results[cam_id]["density_count"] = density_count
+                results[cam_id]["density_map"] = d_map
+                results[cam_id]["density_mode"] = True
+                results[cam_id]["overlap_ratio"] = 1.0
+                results[cam_id]["detections"] = existing_dets  # Always preserve YOLO bounding boxes!
 
         return results

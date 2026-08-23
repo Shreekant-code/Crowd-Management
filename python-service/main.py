@@ -502,7 +502,7 @@ def live(
     except Exception as err:
         raise HTTPException(status_code=500, detail=str(err))
 
-    def stream_generator():
+    async def stream_generator():
         last_frame_bytes = None
         has_sent_initial = False
         try:
@@ -518,18 +518,18 @@ def live(
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + latest_jpeg + b"\r\n"
                     )
-                    time.sleep(0.03)
+                    await asyncio.sleep(0.03)
                 elif not has_sent_initial:
                     has_sent_initial = True
                     yield (
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + _WARMUP_PLACEHOLDER_JPEG + b"\r\n"
                     )
-                    time.sleep(0.05)
+                    await asyncio.sleep(0.05)
                 elif status in {"stopped", "completed", "failed"}:
                     break
                 else:
-                    time.sleep(0.03)
+                    await asyncio.sleep(0.03)
         except (GeneratorExit, asyncio.CancelledError):
             pass
 
@@ -540,7 +540,7 @@ def live(
 
 
 @app.get("/camera/{camera_id}/live")
-def camera_live(
+async def camera_live(
     camera_id: str,
     source: str | None = Query(None, description="RTSP/HTTP/HLS stream URL"),
     user_id: str | None = Query(None, description="Optional user identifier"),
@@ -562,7 +562,7 @@ def camera_live(
     except Exception as err:
         raise HTTPException(status_code=500, detail=str(err))
 
-    def stream_generator():
+    async def stream_generator():
         last_frame_bytes = None
         has_sent_initial = False
         try:
@@ -578,18 +578,18 @@ def camera_live(
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + latest_jpeg + b"\r\n"
                     )
-                    time.sleep(0.03)
+                    await asyncio.sleep(0.03)
                 elif not has_sent_initial:
                     has_sent_initial = True
                     yield (
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + _WARMUP_PLACEHOLDER_JPEG + b"\r\n"
                     )
-                    time.sleep(0.05)
+                    await asyncio.sleep(0.05)
                 elif status in {"stopped", "completed", "failed"}:
                     break
                 else:
-                    time.sleep(0.03)
+                    await asyncio.sleep(0.03)
         except (GeneratorExit, asyncio.CancelledError):
             pass
 
@@ -701,3 +701,9 @@ def get_camera_stream_latest(
         "updated_at": result.get("updated_at") if result else None,
         "result": result,
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
+
