@@ -1,4 +1,8 @@
+import cameraRepository from "../data/cameraRepository.js";
+import alertRepository from "../data/alertRepository.js";
 import { registerUploadResult } from "../services/aiPredictionService.js";
+import { emitAlert, emitCamera, emitDashboard } from "../services/socketHub.js";
+import { buildGlobalAnalytics } from "../services/globalAnalyticsEngine.js";
 
 async function receiveUploadResult(req, res) {
   if (!req.body?.job_id) {
@@ -13,4 +17,88 @@ async function receiveUploadResult(req, res) {
   });
 }
 
-export { receiveUploadResult };
+/**
+ * Ingests a consolidated batch telemetry payload pushed by the Python AI Service at 2 FPS.
+ */
+async function receiveTelemetryBatch(req, res) {
+  const cameraData = req.body?.camera_data || {};
+  const userIdsToUpdate = new Set();
+  const timestamp = req.body?.timestamp || Date.now() / 1000.0;
+
+  for (const [cameraId, telemetry] of Object.entries(cameraData)) {
+    const camera = cameraRepository.getById(cameraId);
+    if (!camera) {
+      continue;
+    }
+
+    const currentMetrics = camera.metrics || {};
+    const count = Number(telemetry.count ?? telemetry.people_count ?? currentMetrics.count ?? 0);
+    const risk = telemetry.risk || (count > 30 ? "High" : count > 15 ? "Medium" : "Low");
+    const riskScore = Number(telemetry.risk_score ?? (count / 30.0).toFixed(2));
+
+    const updatedMetrics = {
+      ...currentMetrics,
+      ...telemetry,
+      count,
+      current_count: count,
+      people_count: count,
+      risk,
+      risk_score: riskScore,
+      camera_health: "good",
+      processing_status: "streaming",
+      updatedAt: new Date().toISOString(),
+    };
+
+    camera.metrics = updatedMetrics;
+    camera.lastFrameAt = updatedMetrics.updatedAt;
+    cameraRepository.save(camera);
+
+    userIdsToUpdate.add(camera.userId);
+
+    // Emit live camera update via WebSocket
+    emitCamera(camera.userId, camera);
+
+    // Trigger alert if high risk
+    if (risk === "High" || risk === "Critical") {
+      const activeAlerts = alertRepository.listByUser(camera.userId, { limit: 1 });
+      const lastAlert = activeAlerts[0];
+      const now = Date.now();
+      
+      // Throttle alerts per camera: maximum 1 alert per 30 seconds
+      if (!lastAlert || lastAlert.cameraId !== camera.id || now - new Date(lastAlert.createdAt).getTime() > 30000) {
+        const newAlert = alertRepository.create({
+          userId: camera.userId,
+          cameraId: camera.id,
+          zoneName: camera.zoneName,
+          severity: risk === "Critical" ? "critical" : "high",
+          type: "CROWD_SURGE",
+          message: `High density surge detected in ${camera.zoneName} (Count: ${count})`,
+          count,
+        });
+        emitAlert(camera.userId, newAlert);
+      }
+    }
+  }
+
+  // Broadcast updated dashboard summaries to affected user dashboards
+  for (const userId of userIdsToUpdate) {
+    const userCameras = cameraRepository.listByUser(userId);
+    const alerts = alertRepository.listByUser(userId, { limit: 20 });
+    const globalAnalytics = buildGlobalAnalytics(userCameras, alerts);
+
+    emitDashboard(userId, {
+      cameras: userCameras,
+      alerts,
+      analytics: globalAnalytics,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  return res.json({
+    status: "ok",
+    processed_cameras: Object.keys(cameraData).length,
+    timestamp,
+  });
+}
+
+export { receiveUploadResult, receiveTelemetryBatch };

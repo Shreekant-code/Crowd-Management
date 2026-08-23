@@ -17,6 +17,7 @@ from utils.config import (
     COUNT_SMOOTHING_WINDOW,
     CSRNET_FRAME_INTERVAL,
     CSRNET_TIMEOUT_SECONDS,
+    DEBUG_EVERY_N_FRAMES,
     DENSE_MODEL_SWITCH_THRESHOLD,
     DENSITY_MAP_OUTPUT_HEIGHT,
     DENSITY_MAP_OUTPUT_WIDTH,
@@ -172,12 +173,13 @@ class CrowdRuntime:
         detection_frame = frame
         display_frame = processed_frame if hasattr(processed_frame, "shape") and len(processed_frame.shape) >= 2 else frame
 
-        print(
-            f"[frame] frame_id={frame_id} "
-            f"shape={getattr(frame, 'shape', None)} "
-            f"dtype={getattr(frame, 'dtype', None)} "
-            f"preprocessed_shape={getattr(processed_frame, 'shape', None)}"
-        )
+        if DEBUG_EVERY_N_FRAMES > 0 and frame_id and frame_id % DEBUG_EVERY_N_FRAMES == 0:
+            print(
+                f"[frame] frame_id={frame_id} "
+                f"shape={getattr(frame, 'shape', None)} "
+                f"dtype={getattr(frame, 'dtype', None)} "
+                f"preprocessed_shape={getattr(processed_frame, 'shape', None)}"
+            )
 
         yolo_result = self._run_yolo_pipeline(detection_frame, frame_id)
         self.processed_frames += 1
@@ -259,8 +261,9 @@ class CrowdRuntime:
             mode=selected["model_used"],
         )
         self.current_mode = selected["model_used"]
-        if self.current_mode == "CSRNet":
+        if smoothed_count > 0:
             self.last_valid_count = smoothed_count
+        if self.current_mode == "CSRNet":
             self.failure_count = 0
         else:
             self.failure_count += 1
@@ -470,8 +473,10 @@ class CrowdRuntime:
 
     def _smooth_count(self, count: int) -> int:
         if count <= 0:
-            self.count_window.clear()
-            self.count_window.append(0.0)
+            if self.count_window:
+                self.count_window.append(0.0)
+                average = sum(self.count_window) / max(len(self.count_window), 1)
+                return max(int(round(average)), 0)
             return 0
 
         self.count_window.append(float(max(count, 0)))

@@ -2,7 +2,7 @@ from typing import Dict, List
 
 import numpy as np
 
-from utils.config import STREAM_TARGET_FPS
+from utils.config import DEBUG_EVERY_N_FRAMES, STREAM_TARGET_FPS
 
 try:
     import supervision as sv
@@ -123,7 +123,8 @@ class PersonTracker:
             )
 
         items.sort(key=lambda item: item["id"])
-        print(f"[tracker] tracked_ids={[item['id'] for item in items]}")
+        if DEBUG_EVERY_N_FRAMES > 0:
+            print(f"[tracker] tracked_ids={[item['id'] for item in items]}")
         return items
 
     def _update_fallback(self, detections: List[Dict[str, float]]) -> List[Dict[str, int]]:
@@ -197,5 +198,6 @@ class PersonTracker:
             )
 
         items.sort(key=lambda item: item["id"])
-        print(f"[tracker] tracked_ids={[item['id'] for item in items]}")
+        if DEBUG_EVERY_N_FRAMES > 0:
+            print(f"[tracker] tracked_ids={[item['id'] for item in items]}")
         return items

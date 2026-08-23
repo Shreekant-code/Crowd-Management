@@ -173,7 +173,7 @@ def _ensure_session(camera_id: str, source: str) -> LiveSession:
     with sessions_lock:
         existing = sessions.get(camera_id)
         if existing is not None:
-            if existing.stream_url == source:
+            if existing.stream_url == source and existing.status != "failed":
                 existing.touch()
                 return existing
             existing.stop()
@@ -182,7 +182,12 @@ def _ensure_session(camera_id: str, source: str) -> LiveSession:
         session = LiveSession(camera_id=camera_id, stream_url=source)
         sessions[camera_id] = session
 
-    session.start()
+    try:
+        session.start()
+    except Exception as error:
+        with sessions_lock:
+            sessions.pop(camera_id, None)
+        raise error
     return session
 
 

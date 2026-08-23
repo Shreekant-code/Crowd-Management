@@ -7,8 +7,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "build": "node -e \"console.log('Backend build step not required')\"",
-    "test:stream": "node test_backend_stream.js"
+    "build": "node -e \"console.log('Backend build step not required')\""
   },
   "dependencies": {
     "cors": "^2.8.5",

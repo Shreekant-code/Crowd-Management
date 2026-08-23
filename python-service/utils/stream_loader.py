@@ -19,7 +19,9 @@ from utils.config import (
     STREAM_RECONNECT_DELAY_SECONDS,
     STREAM_RESIZE_HEIGHT,
     STREAM_RESIZE_WIDTH,
+    STREAM_TARGET_FPS,
 )
+from utils.gst_ingestor import GstFrameIngestor
 
 
 _RESOLVE_CACHE: dict[str, tuple[float, str]] = {}
@@ -290,9 +292,9 @@ def _configure_ffmpeg_http_options(stream_url: str) -> None:
 
     normalized = (stream_url or "").strip().lower()
     if normalized.startswith("rtsp://"):
-        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;udp")
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp|stimeout;5000000"
     elif normalized.startswith("http://") or normalized.startswith("https://"):
-        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "timeout;5000000")
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;5000000"
 
 
 def resolve_playable_stream_url(stream_url: str, source_type: str = "", stop_event: Optional[threading.Event] = None) -> str:
@@ -338,21 +340,30 @@ def resolve_playable_stream_url(stream_url: str, source_type: str = "", stop_eve
     for candidate in candidates:
         if stop_event and stop_event.is_set():
             raise RuntimeError("Stream resolution cancelled by shutdown signal")
-        text = _fetch_text_with_timeout(candidate)
-        parsed = _parse_player_response(text)
-        hls_manifest_url = (parsed or {}).get("streamingData", {}).get("hlsManifestUrl")
-        if hls_manifest_url:
-            _RESOLVE_CACHE[cache_key] = (time.time(), hls_manifest_url)
-            return hls_manifest_url
+        try:
+            text = _fetch_text_with_timeout(candidate)
+            parsed = _parse_player_response(text)
+            hls_manifest_url = (parsed or {}).get("streamingData", {}).get("hlsManifestUrl")
+            if hls_manifest_url:
+                _RESOLVE_CACHE[cache_key] = (time.time(), hls_manifest_url)
+                return hls_manifest_url
 
-        iframe_match = re.search(r"youtube\.com/embed/([A-Za-z0-9_-]{6,})", text, flags=re.IGNORECASE)
-        if iframe_match and iframe_match.group(1) != video_id:
-            return resolve_playable_stream_url(f"https://www.youtube.com/watch?v={iframe_match.group(1)}", "public", stop_event=stop_event)
+            iframe_match = re.search(r"youtube\.com/embed/([A-Za-z0-9_-]{6,})", text, flags=re.IGNORECASE)
+            if iframe_match and iframe_match.group(1) != video_id:
+                return resolve_playable_stream_url(f"https://www.youtube.com/watch?v={iframe_match.group(1)}", "public", stop_event=stop_event)
+        except Exception as err:
+            print(f"[stream-loader] Candidate resolution failed for {candidate}: {err}")
+            continue
 
     ytdlp_resolved = _try_resolve_with_ytdlp(raw_url, stop_event=stop_event)
     if ytdlp_resolved:
         _RESOLVE_CACHE[cache_key] = (time.time(), ytdlp_resolved)
         return ytdlp_resolved
+
+    if _is_direct_media_url(raw_url):
+        print(f"[stream-loader] Resolution failed for public page {raw_url}, falling back to raw URL")
+        _RESOLVE_CACHE[cache_key] = (time.time(), raw_url)
+        return raw_url
 
     raise RuntimeError(f"Unable to resolve playable stream from {raw_url}")
 
@@ -380,7 +391,11 @@ def detect_stream_type(stream_url: str) -> str:
 
 def create_video_capture(stream_url: str, stop_event: Optional[threading.Event] = None) -> cv2.VideoCapture:
     source_url = _coerce_source_url(stream_url)
-    resolved_stream_url = resolve_playable_stream_url(source_url, stop_event=stop_event)
+    try:
+        resolved_stream_url = resolve_playable_stream_url(source_url, stop_event=stop_event)
+    except Exception as error:
+        print(f"[stream-loader] Failed to resolve playable URL for {source_url}: {error}")
+        resolved_stream_url = source_url
     candidate_urls = [resolved_stream_url]
     if source_url and source_url != resolved_stream_url and detect_stream_type(source_url) != "public":
         candidate_urls.append(source_url)
@@ -483,77 +498,22 @@ class LatestFrameCapture:
         self.stream_url = stream_url
         self.stream_type = detect_stream_type(stream_url)
         self.stop_event = threading.Event()
-        self.frame_queue: "queue.Queue[Tuple[Any, float]]" = queue.Queue(maxsize=2)
-        self.capture: Optional[cv2.VideoCapture] = None
-        self.thread = threading.Thread(target=self._reader_loop, daemon=True)
-        self.last_error: Optional[str] = None
-        self.last_frame_at: float = 0.0
-        self.reconnect_attempt = 0
+        self.ingestor = GstFrameIngestor(
+            rtsp_url=stream_url,
+            width=int(STREAM_RESIZE_WIDTH),
+            height=int(STREAM_RESIZE_HEIGHT),
+            fps=float(STREAM_TARGET_FPS),
+        )
 
     def start(self) -> None:
-        self.thread.start()
+        self.ingestor.start()
 
     def stop(self) -> None:
         self.stop_event.set()
-        if self.capture is not None:
-            self.capture.release()
+        self.ingestor.stop()
 
     def read(self, timeout: float = 1.0) -> Tuple[bool, Optional[Any]]:
-        try:
-            frame, captured_at = self.frame_queue.get(timeout=timeout)
-            self.last_frame_at = captured_at
-            return True, frame
-        except queue.Empty:
-            return False, None
+        return self.ingestor.read(timeout=timeout)
 
-    def _reader_loop(self) -> None:
-        while not self.stop_event.is_set():
-            try:
-                if self.stop_event.is_set():
-                    break
-
-                if self.capture is None:
-                    self.last_error = None
-                    self.capture = create_video_capture(self.stream_url, stop_event=self.stop_event)
-                    self.reconnect_attempt = 0
-
-                if self.stop_event.is_set():
-                    break
-
-                ok, frame = self.capture.read()
-                if not ok or frame is None:
-                    raise RuntimeError("frame_read_failed")
-
-                captured_at = time.perf_counter()
-                self._push_latest((frame, captured_at))
-            except Exception as error:
-                if self.stop_event.is_set():
-                    break
-                self.last_error = str(error)
-                self.reconnect_attempt += 1
-                if self.capture is not None:
-                    try:
-                        self.capture.release()
-                    except Exception:
-                        pass
-                    self.capture = None
-                backoff = max(STREAM_RECONNECT_DELAY_SECONDS, 0.5) * min(4.0, 1.0 + (self.reconnect_attempt * 0.5))
-                sleep_time = min(backoff, 10.0)
-                if self.stop_event.wait(timeout=sleep_time):
-                    break
-
-    def _push_latest(self, item: Tuple[Any, float]) -> None:
-        while not self.frame_queue.empty():
-            try:
-                self.frame_queue.get_nowait()
-            except queue.Empty:
-                break
-
-        try:
-            self.frame_queue.put_nowait(item)
-        except queue.Full:
-            try:
-                self.frame_queue.get_nowait()
-            except queue.Empty:
-                pass
-            self.frame_queue.put_nowait(item)
+    def get_latest_frame(self) -> Optional[Any]:
+        return self.ingestor.get_latest_frame()

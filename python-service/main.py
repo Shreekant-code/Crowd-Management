@@ -35,8 +35,9 @@ from utils.config import (
     YOLO_MODEL,
 )
 from utils.crowd_runtime import CrowdRuntime
+from utils.batched_stream_manager import BatchedStreamManager
 from utils.schemas import FileJobRequest, StreamStartRequest, StreamStopRequest
-from utils.stream_loader import LatestFrameCapture, create_video_capture, detect_stream_type, resize_for_inference
+from utils.stream_loader import LatestFrameCapture, _coerce_source_url, create_video_capture, detect_stream_type, resize_for_inference
 
 
 def utc_now() -> str:
@@ -74,6 +75,10 @@ async def lifespan(app: FastAPI):
     logger.info("Service started and ready.")
     yield
     logger.info("Service shutting down. Stopping active stream processors...")
+    try:
+        batched_stream_manager.shutdown()
+    except Exception as e:
+        logger.exception(f"Error shutting down batched_stream_manager: {e}")
     with streams_lock:
         for camera_id, processor in list(active_streams.items()):
             try:
@@ -86,8 +91,12 @@ async def lifespan(app: FastAPI):
     os._exit(0)
 
 
+from utils.error_logging import install_error_handlers
+
 app = FastAPI(title="Crowd Analytics AI Service", version="1.0.0", lifespan=lifespan)
+install_error_handlers(app)
 detector = PersonDetector(model_name=YOLO_MODEL, confidence=YOLO_CONFIDENCE)
+batched_stream_manager = BatchedStreamManager()
 slot_limiter = threading.BoundedSemaphore(MAX_ACTIVE_JOBS)
 jobs_lock = threading.Lock()
 streams_lock = threading.Lock()
@@ -288,11 +297,16 @@ class StreamProcessor:
             )
 
 
+def _normalize_stream_url(url: str) -> str:
+    return _coerce_source_url(url).strip().rstrip('/')
+
+
 def _get_or_create_stream_processor(camera_id: str, stream_url: str, user_id: Optional[str] = None, zone_name: Optional[str] = None) -> StreamProcessor:
+    norm_url = _normalize_stream_url(stream_url)
     with streams_lock:
         existing = active_streams.get(camera_id)
         if existing is not None:
-            if existing.stream_url == stream_url:
+            if _normalize_stream_url(existing.stream_url) == norm_url and existing.status not in {"stopped", "failed"}:
                 return existing
 
             existing.stop()
@@ -301,7 +315,13 @@ def _get_or_create_stream_processor(camera_id: str, stream_url: str, user_id: Op
         processor = StreamProcessor(camera_id, stream_url, user_id, zone_name)
         active_streams[camera_id] = processor
 
-    processor.start()
+    try:
+        processor.start()
+    except Exception as error:
+        with streams_lock:
+            active_streams.pop(camera_id, None)
+        raise error
+
     return processor
 
 
@@ -407,53 +427,31 @@ def get_job(job_id: str) -> Dict[str, Any]:
 
 
 @app.post("/streams/start")
+@app.post("/stream/start")
 def start_stream(request: StreamStartRequest) -> Dict[str, Any]:
-    with streams_lock:
-        if request.camera_id in active_streams:
-            return {
-                "camera_id": request.camera_id,
-                "status": active_streams[request.camera_id].status,
-                "started_at": utc_now(),
-            }
-
-        processor = StreamProcessor(
-            camera_id=request.camera_id,
-            stream_url=request.stream_url,
-            user_id=request.user_id,
-            zone_name=request.zone_name,
-        )
-        active_streams[request.camera_id] = processor
-
-    try:
-        processor.start()
-    except RuntimeError:
-        with streams_lock:
-            active_streams.pop(request.camera_id, None)
-        raise HTTPException(status_code=429, detail="AI service is at concurrency limit")
-
-    logger.info(f"[stream-lifecycle] Stream processing started for camera_id={request.camera_id}")
+    logger.info(f"[stream-lifecycle] Registering camera stream: {request.camera_id} ({request.stream_url})")
+    res = batched_stream_manager.start_camera(
+        camera_id=request.camera_id,
+        stream_url=request.stream_url,
+        user_id=request.user_id,
+        zone_name=request.zone_name,
+    )
     return {
         "camera_id": request.camera_id,
-        "status": "processing_started",
+        "status": res.get("status", "processing_started"),
+        "mode": res.get("mode", "d3d11_hardware"),
         "started_at": utc_now(),
     }
 
 
 @app.post("/streams/stop")
+@app.post("/stream/stop")
 def stop_stream(request: StreamStopRequest) -> Dict[str, Any]:
     logger.info(f"[stream-lifecycle] Received stop request for camera_id={request.camera_id}")
-    with streams_lock:
-        processor = active_streams.get(request.camera_id)
-
-    if processor is not None:
-        processor.stop()
-        with streams_lock:
-            active_streams.pop(request.camera_id, None)
-        logger.info(f"[stream-lifecycle] Camera {request.camera_id} stream processor stopped & active stream memory released.")
-
+    res = batched_stream_manager.stop_camera(request.camera_id)
     return {
         "camera_id": request.camera_id,
-        "status": "stopped",
+        "status": res.get("status", "stopped"),
         "timestamp": utc_now(),
     }
 
@@ -492,34 +490,46 @@ def live(
 
     normalized_source = source.strip()
     normalized_camera_id = (camera_id or normalized_source).strip()
-    processor = _get_or_create_stream_processor(
-        normalized_camera_id,
-        normalized_source,
-        user_id=user_id,
-        zone_name=zone_name,
-    )
+    try:
+        processor = _get_or_create_stream_processor(
+            normalized_camera_id,
+            normalized_source,
+            user_id=user_id,
+            zone_name=zone_name,
+        )
+    except RuntimeError as err:
+        raise HTTPException(status_code=429, detail=str(err))
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=str(err))
 
     def stream_generator():
         last_frame_bytes = None
+        has_sent_initial = False
         try:
             while not processor.stop_event.is_set():
                 with processor.lock:
                     latest_jpeg = processor.latest_jpeg
+                    status = processor.status
 
                 if latest_jpeg and latest_jpeg != last_frame_bytes:
                     last_frame_bytes = latest_jpeg
+                    has_sent_initial = True
                     yield (
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + latest_jpeg + b"\r\n"
                     )
                     time.sleep(0.03)
-                else:
-                    frame_to_send = last_frame_bytes or _WARMUP_PLACEHOLDER_JPEG
+                elif not has_sent_initial:
+                    has_sent_initial = True
                     yield (
                         b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n\r\n" + frame_to_send + b"\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + _WARMUP_PLACEHOLDER_JPEG + b"\r\n"
                     )
-                    time.sleep(0.08)
+                    time.sleep(0.05)
+                elif status in {"stopped", "completed", "failed"}:
+                    break
+                else:
+                    time.sleep(0.03)
         except (GeneratorExit, asyncio.CancelledError):
             pass
 
@@ -540,12 +550,17 @@ def camera_live(
         raise HTTPException(status_code=400, detail="source query parameter is required")
 
     normalized_source = source.strip()
-    processor = _get_or_create_stream_processor(
-        camera_id.strip(),
-        normalized_source,
-        user_id=user_id,
-        zone_name=zone_name,
-    )
+    try:
+        processor = _get_or_create_stream_processor(
+            camera_id.strip(),
+            normalized_source,
+            user_id=user_id,
+            zone_name=zone_name,
+        )
+    except RuntimeError as err:
+        raise HTTPException(status_code=429, detail=str(err))
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=str(err))
 
     def stream_generator():
         last_frame_bytes = None
@@ -563,14 +578,16 @@ def camera_live(
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + latest_jpeg + b"\r\n"
                     )
+                    time.sleep(0.03)
                 elif not has_sent_initial:
                     has_sent_initial = True
                     yield (
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + _WARMUP_PLACEHOLDER_JPEG + b"\r\n"
                     )
-                elif status in {"reconnecting", "warming_up"}:
                     time.sleep(0.05)
+                elif status in {"stopped", "completed", "failed"}:
+                    break
                 else:
                     time.sleep(0.03)
         except (GeneratorExit, asyncio.CancelledError):
@@ -583,14 +600,24 @@ def camera_live(
 
 
 @app.get("/streams/{camera_id}/latest")
+@app.get("/stream/{camera_id}/stats")
 def get_stream_latest(camera_id: str) -> Dict[str, Any]:
+    stats = batched_stream_manager.get_camera_stats(camera_id)
+    if stats:
+        return {
+            "camera_id": camera_id,
+            "status": "running",
+            "updated_at": stats.get("updatedAt"),
+            "result": stats,
+        }
+
     with streams_lock:
         processor = active_streams.get(camera_id)
 
     if processor is None:
         return {
             "camera_id": camera_id,
-            "status": "warming_up",
+            "status": "idle",
             "updated_at": None,
             "result": None,
         }
@@ -616,12 +643,18 @@ def get_stream_stats(
 
     normalized_source = source.strip()
     normalized_camera_id = (camera_id or normalized_source).strip()
-    processor = _get_or_create_stream_processor(
-        normalized_camera_id,
-        normalized_source,
-        user_id=user_id,
-        zone_name=zone_name,
-    )
+    try:
+        processor = _get_or_create_stream_processor(
+            normalized_camera_id,
+            normalized_source,
+            user_id=user_id,
+            zone_name=zone_name,
+        )
+    except RuntimeError as err:
+        raise HTTPException(status_code=429, detail=str(err))
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=str(err))
+
     result = processor.get_latest()
     if result is None:
         return {
@@ -639,7 +672,6 @@ def get_stream_stats(
     }
 
 
-
 @app.get("/camera/{camera_id}/stats")
 def get_camera_stream_latest(
     camera_id: str,
@@ -650,12 +682,18 @@ def get_camera_stream_latest(
     if source is None or not source.strip():
         raise HTTPException(status_code=400, detail="source query parameter is required")
 
-    processor = _get_or_create_stream_processor(
-        camera_id.strip(),
-        source.strip(),
-        user_id=user_id,
-        zone_name=zone_name,
-    )
+    try:
+        processor = _get_or_create_stream_processor(
+            camera_id.strip(),
+            source.strip(),
+            user_id=user_id,
+            zone_name=zone_name,
+        )
+    except RuntimeError as err:
+        raise HTTPException(status_code=429, detail=str(err))
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=str(err))
+
     result = processor.get_latest()
     return {
         "camera_id": camera_id,

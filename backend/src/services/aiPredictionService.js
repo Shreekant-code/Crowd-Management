@@ -126,6 +126,7 @@ function getUploadResult(jobId) {
 
 export {
   startFileAnalysis,
+  ensureStreamStarted,
   getLatestStreamAnalysis,
   stopStreamAnalysis,
   registerUploadResult,

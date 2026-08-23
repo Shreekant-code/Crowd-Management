@@ -8,6 +8,7 @@ from advanced_models.csrnet import CSRNetDensityEstimator
 from utils.config import (
     ACTIVE_TRACK_PERSISTENCE_FRAMES,
     CONGESTION_ALERT_THRESHOLD,
+    DEBUG_EVERY_N_FRAMES,
     DENSITY_ALERT_THRESHOLD,
     DENSE_COUNT_THRESHOLD,
     ENABLE_ADVANCED_MODELS,
@@ -253,11 +254,12 @@ class AnalyticsEngine:
             "updated_at": utc_now(),
         }
 
-        print(
-            f"[analytics] frame={frame_id} shape=({height},{width}) "
-            f"detections={len(detections)} tracked={len(current_detected_ids)} "
-            f"current_count={current_count} total_count={total_count}"
-        )
+        if DEBUG_EVERY_N_FRAMES > 0 and frame_id and frame_id % DEBUG_EVERY_N_FRAMES == 0:
+            print(
+                f"[analytics] frame={frame_id} shape=({height},{width}) "
+                f"detections={len(detections)} tracked={len(current_detected_ids)} "
+                f"current_count={current_count} total_count={total_count}"
+            )
 
         self.last_count = current_count
         return result
@@ -304,6 +306,55 @@ class AnalyticsEngine:
             "risk_score": 0.0,
             "danger_score": 0.0,
             "updated_at": utc_now(),
+        }
+
+    def build_stream_result(
+        self,
+        tracks: List[Dict[str, Any]],
+        detections: List[Dict[str, Any]],
+        count: int,
+        density_mode: bool = False,
+        overlap_ratio: float = 0.0,
+    ) -> Dict[str, Any]:
+        zone_counts = {"left": 0, "center": 0, "right": 0}
+        heatmap_points = []
+
+        for track in tracks:
+            cx, cy = track.get("center", [320, 320])
+            heatmap_points.append({"x": cx, "y": cy})
+            if cx < 213:
+                zone_counts["left"] += 1
+            elif cx < 426:
+                zone_counts["center"] += 1
+            else:
+                zone_counts["right"] += 1
+
+        self.heatmap_history.extend([(p["x"], p["y"]) for p in heatmap_points])
+        effective_count = int(count)
+        risk = derive_risk(effective_count)
+
+        crowd_features = {
+            "density_score": round(min(effective_count / 30.0, 1.0), 4),
+            "movement_score": 0.15,
+            "congestion_score": round(overlap_ratio, 4),
+            "hotspot_ratio": round(min(len(heatmap_points) / 20.0, 1.0), 4),
+        }
+
+        return {
+            "people_count": effective_count,
+            "current_count": effective_count,
+            "count": effective_count,
+            "density_count": effective_count if density_mode else 0,
+            "density_mode": density_mode,
+            "overlap_ratio": overlap_ratio,
+            "active_track_ids": [t.get("id") for t in tracks if "id" in t],
+            "detections": tracks if tracks else detections,
+            "heatmap_points": [{"x": x, "y": y} for x, y in list(self.heatmap_history)],
+            "zone_counts": zone_counts,
+            "risk": risk,
+            "crowd_features": crowd_features,
+            "risk_score": round(min(effective_count / 30.0, 1.0), 4),
+            "updatedAt": utc_now(),
         }
 
     def stale_result(self, previous_result: Dict[str, Any] | None = None) -> Dict[str, Any]:

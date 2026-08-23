@@ -15,3 +15,4 @@ uploads/
 processed/
 *.log
 data/*.json
+.venv_wsl

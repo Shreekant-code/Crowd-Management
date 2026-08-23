@@ -51,7 +51,7 @@ export function GlobalAnalyticsPanel({ global, topActiveZones = [] }) {
           <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Most Crowded</p>
           <p className="mt-2 text-sm font-semibold text-slate-950">{global?.mostCrowdedCamera?.zoneName || "N/A"}</p>
           <p className="mt-1 text-xs text-slate-500">
-            {global?.mostCrowdedCamera ? `${global.mostCrowdedCamera.name} - ${global.mostCrowdedCamera.metrics?.current_count ?? 0} people` : "Waiting for live cameras"}
+            {global?.mostCrowdedCamera ? `${global.mostCrowdedCamera.name} - ${global.mostCrowdedCamera.metrics?.current_count ?? global.mostCrowdedCamera.metrics?.count ?? global.mostCrowdedCamera.metrics?.people_count ?? global.mostCrowdedCamera.metrics?.raw_count ?? global.mostCrowdedCamera.metrics?.yolo_count ?? 0} people` : "Waiting for live cameras"}
           </p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -97,7 +97,7 @@ export function GlobalAnalyticsPanel({ global, topActiveZones = [] }) {
                       #{index + 1} {camera.zoneName}
                     </p>
                     <p className="text-xs text-slate-500">
-                      {camera.name} - {camera.metrics?.current_count ?? 0} people
+                      {camera.name} - {camera.metrics?.current_count ?? camera.metrics?.count ?? camera.metrics?.people_count ?? camera.metrics?.raw_count ?? camera.metrics?.yolo_count ?? 0} people
                     </p>
                   </div>
                   <span className={`${riskClass(camera.metrics?.risk)} rounded-full`}>
@@ -105,7 +105,7 @@ export function GlobalAnalyticsPanel({ global, topActiveZones = [] }) {
                   </span>
                 </div>
                 <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
-                  <span>Count {camera.metrics?.current_count ?? camera.metrics?.count ?? camera.metrics?.people_count ?? 0}</span>
+                  <span>Count {camera.metrics?.current_count ?? camera.metrics?.count ?? camera.metrics?.people_count ?? camera.metrics?.raw_count ?? camera.metrics?.yolo_count ?? 0}</span>
                   <span>Prediction {camera.metrics?.prediction_10min_count ?? camera.metrics?.predicted_crowd ?? 0}</span>
                 </div>
               </div>

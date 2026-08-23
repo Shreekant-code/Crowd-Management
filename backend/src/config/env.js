@@ -38,3 +38,7 @@ export const aiStreamPollIntervalMs = Number(process.env.AI_STREAM_POLL_INTERVAL
 export const previewStreamFps = Number(process.env.PREVIEW_STREAM_FPS || 10);
 export const previewStreamWidth = Number(process.env.PREVIEW_STREAM_WIDTH || 640);
 export const previewInputTimeoutMs = Number(process.env.PREVIEW_INPUT_TIMEOUT_MS || 3000);
+
+export const mediaMtxApiUrl = process.env.MEDIAMTX_API_URL || "http://127.0.0.1:9997";
+export const mediaMtxWhepBaseUrl = process.env.MEDIAMTX_WHEP_BASE_URL || "http://localhost:8889";
+export const enableMediaMtx = process.env.ENABLE_MEDIAMTX !== "false";

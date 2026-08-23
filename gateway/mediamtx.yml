@@ -1,0 +1,32 @@
+# MediaMTX Configuration for Crowd Management Platform
+# Optimized for Ultra-Low Latency WebRTC (WHEP) and dynamic camera routing
+
+logLevel: info
+logDestinations: [stdout]
+
+# REST API for dynamic path management
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# RTSP Server
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp, udp]
+
+# WebRTC Server for browser playback (WHEP)
+webrtc: yes
+webrtcAddress: :8889
+webrtcAllowOrigins:
+  - '*'
+webrtcLocalUDPAddress: :8189
+webrtcIPsFromInterfaces: yes
+
+# Disable unused protocols to save memory and CPU
+hls: no
+rtmp: no
+srt: no
+moq: no
+
+# Dynamic path configuration handled via REST API
+paths:
+  all_others:

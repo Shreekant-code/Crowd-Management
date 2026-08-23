@@ -3,13 +3,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LoaderCircle, VideoOff } from "lucide-react";
 import { useStreamManager, STREAM_STATES, STREAM_MODES } from "@/lib/stream-manager";
+import { WhepClient } from "@/lib/whep-client";
 
 function getRiskAccent(risk) {
   if (risk === "Critical") {
     return {
       stroke: "rgba(248, 113, 113, 0.98)",
       fill: "rgba(127, 29, 29, 0.18)",
-      chip: "rgba(127, 29, 29, 0.74)",
+      chip: "rgba(127, 29, 29, 0.85)",
       line: "rgba(248, 113, 113, 0.85)",
     };
   }
@@ -18,7 +19,7 @@ function getRiskAccent(risk) {
     return {
       stroke: "rgba(251, 146, 60, 0.98)",
       fill: "rgba(154, 52, 18, 0.16)",
-      chip: "rgba(154, 52, 18, 0.72)",
+      chip: "rgba(154, 52, 18, 0.82)",
       line: "rgba(251, 146, 60, 0.82)",
     };
   }
@@ -27,7 +28,7 @@ function getRiskAccent(risk) {
     return {
       stroke: "rgba(250, 204, 21, 0.98)",
       fill: "rgba(133, 77, 14, 0.15)",
-      chip: "rgba(133, 77, 14, 0.72)",
+      chip: "rgba(133, 77, 14, 0.80)",
       line: "rgba(250, 204, 21, 0.80)",
     };
   }
@@ -35,35 +36,8 @@ function getRiskAccent(risk) {
   return {
     stroke: "rgba(45, 212, 191, 0.98)",
     fill: "rgba(15, 118, 110, 0.16)",
-    chip: "rgba(15, 118, 110, 0.72)",
+    chip: "rgba(15, 118, 110, 0.80)",
     line: "rgba(45, 212, 191, 0.78)",
-  };
-}
-
-function getDisplayRect(image, width, height) {
-  const naturalWidth = image.naturalWidth || 0;
-  const naturalHeight = image.naturalHeight || 0;
-  if (!naturalWidth || !naturalHeight) {
-    return {
-      scale: 1,
-      displayWidth: width,
-      displayHeight: height,
-      offsetX: 0,
-      offsetY: 0,
-    };
-  }
-
-  const ratioX = width / naturalWidth;
-  const ratioY = height / naturalHeight;
-  const scale = Math.min(ratioX, ratioY);
-  const displayWidth = naturalWidth * scale;
-  const displayHeight = naturalHeight * scale;
-  return {
-    scale,
-    displayWidth,
-    displayHeight,
-    offsetX: Math.max((width - displayWidth) / 2, 0),
-    offsetY: Math.max((height - displayHeight) / 2, 0),
   };
 }
 
@@ -87,48 +61,72 @@ function getDetectionBox(detection = {}) {
 }
 
 export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
-  const imageRef = useRef(null);
+  const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const mediaSizeRef = useRef({ width: 960, height: 540 });
-  const [mediaSize, setMediaSize] = useState({ width: 960, height: 540 });
-
   const containerRef = useRef(null);
-  const boundsRef = useRef({ width: 960, height: 540, naturalWidth: 960, naturalHeight: 540 });
+  const boundsRef = useRef({ width: 960, height: 540, videoWidth: 960, videoHeight: 540 });
+  const trackStatesRef = useRef(new Map());
 
   const {
     status: streamStatus,
+    setStatus: setStreamStatus,
     streamMode,
-    feedSource,
+    whepUrl,
     liveMetrics,
-    streamResolutionStatus,
     sourceBadge,
-    handleImageLoad: onStreamManagerLoad,
-    handleImageError: onStreamManagerError,
   } = useStreamManager({ camera, onLiveMetricsChange });
 
   const metricsRef = useRef(liveMetrics);
+  const isRunning = camera?.status === "running";
 
+  // Ingest telemetry into Track-ID-keyed LERP state machine (2 FPS -> 60 FPS)
   useEffect(() => {
     metricsRef.current = liveMetrics;
+    const detections = Array.isArray(liveMetrics?.detections) ? liveMetrics.detections : [];
+    const now = performance.now();
+
+    detections.forEach((det) => {
+      const trackId = det.id ?? det.track_id;
+      if (trackId == null) return;
+
+      const [x, y, w, h] = getDetectionBox(det);
+      const existing = trackStatesRef.current.get(trackId);
+
+      if (existing) {
+        existing.target = [x, y, w, h];
+        existing.lastSeen = now;
+        existing.confidence = det.confidence ?? existing.confidence;
+      } else {
+        trackStatesRef.current.set(trackId, {
+          current: [x, y, w, h], // Snap immediately on first sighting
+          target: [x, y, w, h],
+          lastSeen: now,
+          confidence: det.confidence ?? 0.85,
+        });
+      }
+    });
+
+    // Prune stale tracks older than 1200ms
+    for (const [trackId, state] of trackStatesRef.current.entries()) {
+      if (now - state.lastSeen > 1200) {
+        trackStatesRef.current.delete(trackId);
+      }
+    }
   }, [liveMetrics]);
 
-  useEffect(() => {
-    mediaSizeRef.current = mediaSize;
-  }, [mediaSize]);
-
-  // Use ResizeObserver to cache layout dimensions without layout thrashing inside rAF
+  // Layout bounds tracking via ResizeObserver
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const updateBounds = () => {
       const rect = container.getBoundingClientRect();
-      const image = imageRef.current;
+      const video = videoRef.current;
       boundsRef.current = {
         width: Math.max(Math.round(rect.width), 1),
         height: Math.max(Math.round(rect.height), 1),
-        naturalWidth: image?.naturalWidth || mediaSizeRef.current.width || 960,
-        naturalHeight: image?.naturalHeight || mediaSizeRef.current.height || 540,
+        videoWidth: video?.videoWidth || 960,
+        videoHeight: video?.videoHeight || 540,
       };
     };
 
@@ -139,30 +137,78 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
     return () => observer.disconnect();
   }, []);
 
+  // WebRTC WHEP connection lifecycle with React 19 Strict Mode protection
+  useEffect(() => {
+    if (!isRunning || !whepUrl) {
+      setStreamStatus(STREAM_STATES.IDLE);
+      return undefined;
+    }
+
+    const video = videoRef.current;
+    if (!video) return undefined;
+
+    let isSubscribed = true;
+
+    const client = new WhepClient({
+      url: whepUrl,
+      onStateChange: (newState) => {
+        if (!isSubscribed) return;
+        if (newState === "live") {
+          setStreamStatus(STREAM_STATES.LIVE);
+        } else if (newState === "connecting") {
+          setStreamStatus(STREAM_STATES.CONNECTING);
+        } else if (newState === "reconnecting") {
+          setStreamStatus(STREAM_STATES.RECONNECTING);
+        } else if (newState === "failed") {
+          setStreamStatus(STREAM_STATES.FAILED);
+        } else {
+          setStreamStatus(STREAM_STATES.IDLE);
+        }
+      },
+      onError: (err) => {
+        if (!isSubscribed) return;
+        console.warn(`[CameraFeed] WHEP connection warning for camera ${camera.id}:`, err?.message);
+      },
+    });
+
+    client.connect(video).catch((err) => {
+      if (isSubscribed) {
+        console.warn(`[CameraFeed] WebRTC failed to connect: ${err?.message}`);
+      }
+    });
+
+    return () => {
+      isSubscribed = false;
+      client.disconnect();
+      if (video) {
+        video.srcObject = null;
+      }
+    };
+  }, [camera.id, isRunning, whepUrl, setStreamStatus]);
+
   const isLive = streamStatus === STREAM_STATES.LIVE;
 
+  // 60 FPS HTML5 Canvas Overlay rendering loop with Track-ID LERP
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !isLive) {
-      return;
+      return undefined;
     }
 
     const context = canvas.getContext("2d");
     if (!context) {
-      return;
+      return undefined;
     }
+
     let animationFrameId = 0;
-    let lastDrawAt = 0;
+    const ALPHA = 0.22; // LERP smoothing factor
 
     const drawOverlay = () => {
       const now = performance.now();
-      if (now - lastDrawAt < 80) {
-        animationFrameId = window.requestAnimationFrame(drawOverlay);
-        return;
-      }
-      lastDrawAt = now;
-
-      const { width, height, naturalWidth, naturalHeight } = boundsRef.current;
+      const video = videoRef.current;
+      const { width, height } = boundsRef.current;
+      const videoWidth = video?.videoWidth || boundsRef.current.videoWidth || 960;
+      const videoHeight = video?.videoHeight || boundsRef.current.videoHeight || 540;
       const dpr = window.devicePixelRatio || 1;
 
       if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
@@ -176,20 +222,45 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
       context.clearRect(0, 0, width, height);
 
       const metrics = metricsRef.current || {};
-      const sourceWidth = mediaSizeRef.current.width || naturalWidth || width;
-      const sourceHeight = mediaSizeRef.current.height || naturalHeight || height;
 
-      // Pure math scaling calculation without DOM query reflows
-      const ratioX = width / Math.max(naturalWidth, 1);
-      const ratioY = height / Math.max(naturalHeight, 1);
-      const scale = Math.min(ratioX, ratioY);
-      const displayWidth = naturalWidth * scale;
-      const displayHeight = naturalHeight * scale;
-      const offsetX = Math.max((width - displayWidth) / 2, 0);
-      const offsetY = Math.max((height - displayHeight) / 2, 0);
+      // Calculate letterbox/pillarbox geometry for pixel-perfect alignment
+      const containerRatio = width / height;
+      const videoRatio = videoWidth / videoHeight;
 
-      const scaleX = displayWidth / Math.max(sourceWidth, 1);
-      const scaleY = displayHeight / Math.max(sourceHeight, 1);
+      let renderWidth, renderHeight, offsetX, offsetY;
+
+      if (compact) {
+        // object-fit: cover
+        if (containerRatio > videoRatio) {
+          renderWidth = width;
+          renderHeight = width / videoRatio;
+          offsetX = 0;
+          offsetY = (height - renderHeight) / 2;
+        } else {
+          renderHeight = height;
+          renderWidth = videoRatio * height;
+          offsetX = (width - renderWidth) / 2;
+          offsetY = 0;
+        }
+      } else {
+        // object-fit: contain
+        if (containerRatio > videoRatio) {
+          renderHeight = height;
+          renderWidth = videoRatio * height;
+          offsetX = (width - renderWidth) / 2;
+          offsetY = 0;
+        } else {
+          renderWidth = width;
+          renderHeight = width / videoRatio;
+          offsetX = 0;
+          offsetY = (height - renderHeight) / 2;
+        }
+      }
+
+      const scaleX = renderWidth / Math.max(videoWidth, 1);
+      const scaleY = renderHeight / Math.max(videoHeight, 1);
+
+      // 1. Draw Density Heatmap Circles
       const heatmapPoints = Array.isArray(metrics.heatmap_points) ? metrics.heatmap_points : [];
       const recentHeatmapPoints = heatmapPoints.slice(-120);
 
@@ -210,63 +281,50 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
         context.fill();
       }
 
-      const detections = Array.isArray(metrics.detections) ? metrics.detections : [];
+      // 2. Draw Smooth Track-ID LERP Bounding Boxes
       const accent = getRiskAccent(metrics.risk || "Low");
-
       context.lineWidth = 2;
       context.font = "12px sans-serif";
-      for (const detection of detections) {
-        const [x = 0, y = 0, w = 0, h = 0] = getDetectionBox(detection);
+
+      for (const [trackId, state] of trackStatesRef.current.entries()) {
+        // Drop stale tracks
+        if (now - state.lastSeen > 1200) {
+          trackStatesRef.current.delete(trackId);
+          continue;
+        }
+
+        // LERP interpolation towards target coordinates
+        for (let i = 0; i < 4; i++) {
+          state.current[i] += (state.target[i] - state.current[i]) * ALPHA;
+        }
+
+        const [x, y, w, h] = state.current;
         const left = offsetX + x * scaleX;
         const top = offsetY + y * scaleY;
         const boxWidth = w * scaleX;
         const boxHeight = h * scaleY;
 
+        // Bounding box frame & background tint
         context.strokeStyle = accent.stroke;
         context.fillStyle = accent.fill;
         context.strokeRect(left, top, boxWidth, boxHeight);
         context.fillRect(left, top, boxWidth, boxHeight);
 
-        const label = `ID: ${detection.id ?? "-"}`;
+        // Track ID & Confidence Pill
+        const label = `ID: ${trackId}`;
         const textWidth = context.measureText(label).width;
         context.fillStyle = accent.chip;
         context.fillRect(left, Math.max(top - 18, 0), textWidth + 10, 18);
         context.fillStyle = "#f8fafc";
         context.fillText(label, left + 5, Math.max(top - 5, 12));
       }
+
       animationFrameId = window.requestAnimationFrame(drawOverlay);
     };
 
     animationFrameId = window.requestAnimationFrame(drawOverlay);
     return () => window.cancelAnimationFrame(animationFrameId);
-  }, [isLive]);
-
-  useEffect(() => {
-    if (camera.status !== "running" || !feedSource) {
-      return undefined;
-    }
-
-    const checkLoaded = () => {
-      const image = imageRef.current;
-      if (!image) {
-        return;
-      }
-
-      const naturalWidth = image.naturalWidth || 0;
-      const naturalHeight = image.naturalHeight || 0;
-      if (naturalWidth > 0 && naturalHeight > 0) {
-        setMediaSize({
-          width: naturalWidth,
-          height: naturalHeight,
-        });
-      }
-      onStreamManagerLoad();
-    };
-
-    checkLoaded();
-    const interval = setInterval(checkLoaded, 2000);
-    return () => clearInterval(interval);
-  }, [camera.id, camera.status, feedSource, onStreamManagerLoad]);
+  }, [isLive, compact]);
 
   return (
     <div className="mt-4 space-y-3">
@@ -274,30 +332,21 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
         ref={containerRef}
         className={`relative overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,rgba(72,208,193,0.18),transparent_35%),rgba(255,255,255,0.04)] ${compact ? "aspect-video" : "h-[38rem]"}`}
       >
-        {camera.status === "running" && feedSource ? (
+        {isRunning ? (
           <>
-            <img
-              ref={imageRef}
-              alt={`${camera.zoneName} live feed`}
-              fetchPriority="high"
-              decoding="async"
-              loading="eager"
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
               className={`h-full w-full bg-slate-950 ${compact ? "object-cover" : "object-contain"}`}
-              onError={() => {
-                console.error(`[CameraFeed] Stream image failed to render on DOM: camera=${camera.id}, src=${feedSource}`);
-                onStreamManagerError();
+              onLoadedMetadata={() => {
+                const video = videoRef.current;
+                if (video) {
+                  boundsRef.current.videoWidth = video.videoWidth || 960;
+                  boundsRef.current.videoHeight = video.videoHeight || 540;
+                }
               }}
-              onLoad={(event) => {
-                const target = event.currentTarget;
-                const naturalWidth = target.naturalWidth || 960;
-                const naturalHeight = target.naturalHeight || 540;
-                setMediaSize({
-                  width: naturalWidth,
-                  height: naturalHeight,
-                });
-                onStreamManagerLoad();
-              }}
-              src={feedSource}
             />
             {isLive ? (
               <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
@@ -305,13 +354,18 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
             {isLive ? (
               <>
                 <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-full bg-slate-950/70 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-white">
-                  {streamMode === STREAM_MODES.AI ? "Live" : "Preview"}
+                  WebRTC Live
                 </div>
                 <div className={`pointer-events-none absolute left-3 top-3 z-10 rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${sourceBadge.tone}`}>
                   {sourceBadge.label}
                 </div>
                 <div className="pointer-events-none absolute left-3 top-11 z-10 rounded-full bg-black/65 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-white">
                   Count {Number(liveMetrics?.current_count ?? liveMetrics?.count ?? liveMetrics?.people_count ?? 0)}
+                  {liveMetrics?.prediction_10min_count != null ? (
+                    <span className="ml-1.5 text-white/70">
+                      (10m: {liveMetrics.prediction_10min_count})
+                    </span>
+                  ) : null}
                 </div>
               </>
             ) : null}
@@ -320,7 +374,9 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
                 <div className="text-center text-white">
                   <LoaderCircle className="mx-auto h-7 w-7 animate-spin text-teal-300" />
                   <p className="mt-2 text-sm font-medium">
-                    {streamStatus === STREAM_STATES.RECONNECTING ? "Reconnecting..." : streamStatus === STREAM_STATES.FALLBACK_PREVIEW ? "Connecting Fallback..." : "Connecting..."}
+                    {streamStatus === STREAM_STATES.RECONNECTING
+                      ? "Reconnecting WebRTC..."
+                      : "Connecting WebRTC Stream..."}
                   </p>
                   <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-white/55">
                     {sourceBadge.label}
@@ -333,7 +389,7 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
           <div className="flex h-full items-center justify-center">
             <div className="text-center text-white">
               <VideoOff className="mx-auto h-8 w-8 text-white/70" />
-              <p className="mt-2 text-sm text-white/70">Start camera to view live preview</p>
+              <p className="mt-2 text-sm text-white/70">Start camera to view live WebRTC feed</p>
               <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-white/55">
                 {sourceBadge.label}
               </p>

@@ -13,12 +13,13 @@ export const STREAM_STATES = {
 };
 
 export const STREAM_MODES = {
+  WEBRTC: "webrtc",
   AI: "ai",
   PREVIEW: "preview",
 };
 
-const STREAM_STALE_MS = 12000;
-const INITIAL_RETRY_DELAY_MS = 1000;
+export const MEDIAMTX_WHEP_BASE =
+  process.env.NEXT_PUBLIC_MEDIAMTX_WHEP_URL || "http://localhost:8889";
 
 // Centralized Socket Subscriber Hub to avoid duplicate socket listeners per camera
 class StreamSocketHub {
@@ -91,9 +92,21 @@ class StreamSocketHub {
 
 const socketHub = new StreamSocketHub();
 
+export function getWhepUrl(camera) {
+  if (!camera?.id) return null;
+  if (camera.webrtcUrl) return camera.webrtcUrl;
+  if (camera.metrics?.webrtc_url) return camera.metrics.webrtc_url;
+  const safeId = String(camera.id).replace(/[^a-zA-Z0-9_-]/g, "_");
+  return `${MEDIAMTX_WHEP_BASE}/cam_${safeId}/whep`;
+}
+
 export function getFeedSource(camera, retrySeed, streamMode) {
   if (!camera?.id) {
     return null;
+  }
+
+  if (streamMode === STREAM_MODES.WEBRTC) {
+    return getWhepUrl(camera);
   }
 
   if (streamMode === STREAM_MODES.AI) {
@@ -133,14 +146,14 @@ export function getSourceBadgeInfo(camera, streamResolutionStatus, streamMode) {
     return { label: "Resolving stream", tone: "bg-yellow-100 text-yellow-800 border-yellow-200" };
   }
 
-  return { label: "Direct Stream", tone: "bg-teal-100 text-teal-700 border-teal-200" };
+  return { label: "WebRTC Live", tone: "bg-teal-100 text-teal-700 border-teal-200" };
 }
 
 export function useStreamManager({ camera, onLiveMetricsChange }) {
   const [status, setStatus] = useState(() =>
     camera?.status === "running" ? STREAM_STATES.CONNECTING : STREAM_STATES.IDLE
   );
-  const [streamMode, setStreamMode] = useState(STREAM_MODES.AI);
+  const [streamMode, setStreamMode] = useState(STREAM_MODES.WEBRTC);
   const [retrySeed, setRetrySeed] = useState(0);
   const [liveMetrics, setLiveMetrics] = useState(camera?.metrics || {});
   const [streamResolutionStatus, setStreamResolutionStatus] = useState(
@@ -149,8 +162,6 @@ export function useStreamManager({ camera, onLiveMetricsChange }) {
 
   const cameraRef = useRef(camera);
   const metricsRef = useRef(camera?.metrics || {});
-  const reconnectTimerRef = useRef(null);
-  const staleCheckTimerRef = useRef(null);
   const onLiveMetricsChangeRef = useRef(onLiveMetricsChange);
 
   useEffect(() => {
@@ -170,21 +181,12 @@ export function useStreamManager({ camera, onLiveMetricsChange }) {
       if (merged.stream_resolution_status) {
         setStreamResolutionStatus(merged.stream_resolution_status);
       }
-
-      if (merged.stream_resolution_status === "fallback_preview") {
-        setStreamMode(STREAM_MODES.PREVIEW);
-      }
     }
   }, [camera?.metrics]);
 
   useEffect(() => {
     setRetrySeed(0);
-    setStreamMode(STREAM_MODES.AI);
-
-    if (reconnectTimerRef.current) {
-      clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
+    setStreamMode(STREAM_MODES.WEBRTC);
 
     if (camera?.status === "running") {
       setStatus(STREAM_STATES.CONNECTING);
@@ -192,12 +194,6 @@ export function useStreamManager({ camera, onLiveMetricsChange }) {
       setStatus(STREAM_STATES.IDLE);
     }
   }, [camera?.id, camera?.status]);
-
-  useEffect(() => {
-    console.log(
-      `[StreamManager] Stream status transition: camera=${camera?.id}, status=${status}, mode=${streamMode}, resolutionStatus=${streamResolutionStatus}`
-    );
-  }, [camera?.id, status, streamMode, streamResolutionStatus]);
 
   const handleBackendCameraUpdate = useCallback((updatedCamera) => {
     if (!updatedCamera?.id) return;
@@ -209,19 +205,12 @@ export function useStreamManager({ camera, onLiveMetricsChange }) {
       updatedAt: updatedCamera.metrics?.updatedAt || updatedCamera.lastFrameAt || new Date().toISOString(),
     };
 
-    console.log(
-      `[StreamManager] WebSocket metrics response received from backend: camera=${updatedCamera.id}, count=${nextMetrics.current_count ?? nextMetrics.count}, risk=${nextMetrics.risk}, resolution=${nextMetrics.stream_resolution_status}`
-    );
-
     metricsRef.current = nextMetrics;
     setLiveMetrics(nextMetrics);
 
     const backendResStatus = nextMetrics.stream_resolution_status || updatedCamera.streamResolutionStatus;
     if (backendResStatus) {
       setStreamResolutionStatus(backendResStatus);
-      if (backendResStatus === "fallback_preview") {
-        setStreamMode(STREAM_MODES.PREVIEW);
-      }
     }
 
     if (nextMetrics.camera_health === "unstable" || nextMetrics.processing_status === "error") {
@@ -244,97 +233,20 @@ export function useStreamManager({ camera, onLiveMetricsChange }) {
     };
   }, [camera?.id, camera?.status, handleBackendCameraUpdate]);
 
-  const triggerReconnect = useCallback(() => {
-    if (reconnectTimerRef.current) return;
-
-    console.log(`[StreamManager] Triggering stream reconnect retry for camera=${cameraRef.current?.id}`);
-
-    setStatus(STREAM_STATES.RECONNECTING);
-
-    const currentResStatus = metricsRef.current?.stream_resolution_status;
-    if (currentResStatus === "fallback_preview") {
-      setStreamMode(STREAM_MODES.PREVIEW);
-      setStatus(STREAM_STATES.FALLBACK_PREVIEW);
-    }
-
-    setRetrySeed((prev) => prev + 1);
-
-    reconnectTimerRef.current = setTimeout(() => {
-      reconnectTimerRef.current = null;
-      if (cameraRef.current?.status === "running") {
-        setStatus((curr) => (curr === STREAM_STATES.LIVE ? curr : STREAM_STATES.CONNECTING));
-      }
-    }, INITIAL_RETRY_DELAY_MS);
-  }, []);
-
-  const lastImageLoadAtRef = useRef(Date.now());
-
-  const handleImageLoad = useCallback(() => {
-    lastImageLoadAtRef.current = Date.now();
-    if (reconnectTimerRef.current) {
-      clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-    setStatus((curr) => {
-      if (curr !== STREAM_STATES.LIVE) {
-        console.log(`[StreamManager] Stream feed image loaded successfully in DOM: camera=${cameraRef.current?.id}`);
-        return STREAM_STATES.LIVE;
-      }
-      return curr;
-    });
-  }, []);
-
-  const handleImageError = useCallback(() => {
-    console.error(`[StreamManager] Stream feed image load error on DOM element: camera=${cameraRef.current?.id}`);
-    triggerReconnect();
-  }, [triggerReconnect]);
-
-  useEffect(() => {
-    if (camera?.status !== "running" || status !== STREAM_STATES.LIVE) {
-      return;
-    }
-
-    const checkStale = () => {
-      // If the DOM image element loaded frames recently, the stream is active
-      const imageAge = Date.now() - lastImageLoadAtRef.current;
-      if (imageAge < STREAM_STALE_MS) {
-        return;
-      }
-
-      const updatedAt = metricsRef.current?.updatedAt || cameraRef.current?.lastFrameAt;
-      if (updatedAt) {
-        const metricsAge = Date.now() - new Date(updatedAt).getTime();
-        if (metricsAge > STREAM_STALE_MS) {
-          console.warn(
-            `[StreamManager] Stream declared stale: imageAge=${imageAge}ms, metricsAge=${metricsAge}ms for camera=${cameraRef.current?.id}`
-          );
-          triggerReconnect();
-        }
-      }
-    };
-
-    staleCheckTimerRef.current = setInterval(checkStale, 3000);
-
-    return () => {
-      if (staleCheckTimerRef.current) {
-        clearInterval(staleCheckTimerRef.current);
-      }
-    };
-  }, [camera?.status, status, triggerReconnect]);
-
+  const whepUrl = getWhepUrl(camera);
   const feedSource = getFeedSource(camera, retrySeed, streamMode);
   const sourceBadge = getSourceBadgeInfo(camera, streamResolutionStatus, streamMode);
 
   return {
     status,
+    setStatus,
     streamMode,
-    retrySeed,
+    setStreamMode,
+    whepUrl,
     feedSource,
     liveMetrics,
     streamResolutionStatus,
     sourceBadge,
-    handleImageLoad,
-    handleImageError,
-    reconnect: triggerReconnect,
+    retrySeed,
   };
 }

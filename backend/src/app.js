@@ -5,7 +5,7 @@ import dashboardRoutes from "./routes/dashboardRoutes.js";
 import globalRoutes from "./routes/globalRoutes.js";
 import streamRoutes from "./routes/streamRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
-import { receiveUploadResult } from "./controllers/aiCallbackController.js";
+import { receiveUploadResult, receiveTelemetryBatch } from "./controllers/aiCallbackController.js";
 import { frontendUrl } from "./config/env.js";
 import { requireAiCallbackAuth } from "./middleware/requireAiCallbackAuth.js";
 import { requirePlatformAuth } from "./middleware/requirePlatformAuth.js";
@@ -18,7 +18,7 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: "20mb" }));
 app.use((req, res, next) => {
   res.on("finish", () => {
     if (res.statusCode >= 400) {
@@ -37,6 +37,8 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.post("/internal/ai/upload-result", requireAiCallbackAuth, receiveUploadResult);
+app.post("/internal/telemetry/batch", receiveTelemetryBatch);
+app.post("/api/internal/telemetry/batch", receiveTelemetryBatch);
 
 app.use("/api/cameras", requirePlatformAuth, cameraRoutes);
 app.use("/api/dashboard", requirePlatformAuth, dashboardRoutes);

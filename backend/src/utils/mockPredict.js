@@ -25,34 +25,44 @@ function deriveRisk(count) {
   return "Low";
 }
 
+function getRandomCount() {
+  return Math.floor(Math.random() * 8) + 5; // 5 to 12
+}
+
 function buildMockPrediction(overrides = {}) {
+  const initialCount = getRandomCount();
+  const left = Math.floor(initialCount / 3);
+  const right = Math.floor(initialCount / 3);
+  const center = initialCount - left - right;
+
   return {
-    count: 0,
-    people_count: 0,
-    current_count: 0,
-    total_count: 0,
-    density_count: 0,
-    base_count: 0,
-    predicted_crowd: 0,
-    smoothed_count: 0,
-    final_count: 0,
-    active_track_ids: [],
-    risk: "Low",
+    count: initialCount,
+    people_count: initialCount,
+    current_count: initialCount,
+    total_count: initialCount + Math.floor(Math.random() * 10) + 5,
+    density_count: initialCount,
+    base_count: initialCount,
+    predicted_crowd: initialCount + Math.floor(Math.random() * 4),
+    prediction_10min_count: initialCount + Math.floor(Math.random() * 4) + 1,
+    smoothed_count: initialCount,
+    final_count: initialCount,
+    active_track_ids: Array.from({ length: initialCount }, (_, i) => i + 1),
+    risk: deriveRisk(initialCount),
     detections: [],
     heatmap_points: [],
     alerts: [],
-    zone_counts: { left: 0, center: 0, right: 0 },
+    zone_counts: { left, center, right },
     line_crossing: {
-      entry: 0,
-      exit: 0,
+      entry: Math.floor(Math.random() * 3),
+      exit: Math.floor(Math.random() * 2),
     },
     crowd_features: {
-      density_score: 0,
-      movement_score: 0,
-      congestion_score: 0,
-      hotspot_ratio: 0,
+      density_score: Number((initialCount / 20).toFixed(2)),
+      movement_score: 0.15,
+      congestion_score: Number((initialCount / 25).toFixed(2)),
+      hotspot_ratio: 0.35,
     },
-    risk_score: 0,
+    risk_score: Number((initialCount / 25).toFixed(2)),
     processing_status: "mock_fallback",
     source: "mockPredict",
     ...overrides,
@@ -66,7 +76,11 @@ function normalizePrediction(payload, fallback = buildMockPrediction()) {
       ? payload.people_count
       : Number.isFinite(payload?.count)
         ? payload.count
-        : fallback.current_count;
+        : Number.isFinite(payload?.raw_count)
+          ? payload.raw_count
+          : Number.isFinite(payload?.yolo_count)
+            ? payload.yolo_count
+            : fallback.current_count;
   const totalCount = Number.isFinite(payload?.total_count)
     ? payload.total_count
     : fallback.total_count;

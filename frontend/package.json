@@ -3,11 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "clean": "node scripts/clean-next-cache.js",
+    "clean": "node -e \"const fs = require('fs'); try { fs.rmSync('.next/cache', { recursive: true, force: true }); } catch (e) {}\"",
     "dev": "next dev --webpack",
     "build": "next build",
-    "start": "next start",
-    "test:stream": "node scripts/test_frontend_stream.js"
+    "start": "next start"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

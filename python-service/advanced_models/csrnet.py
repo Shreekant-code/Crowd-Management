@@ -1,9 +1,11 @@
-from typing import Any, Dict, List
+from __future__ import annotations
 
+import os
+from typing import Any, Dict, List, Optional
 import cv2
 import numpy as np
 
-from advanced_models.model_loader import get_torch, get_torch_device, load_torch_module
+from inference.dml_engine import DirectMLInferenceEngine
 from utils.config import (
     CSRNET_INPUT_HEIGHT,
     CSRNET_INPUT_WIDTH,
@@ -12,20 +14,38 @@ from utils.config import (
     DENSITY_MAP_OUTPUT_WIDTH,
 )
 
+MODELS_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
+DEFAULT_MOBILECOUNT_PATH = os.path.join(MODELS_DIR, "mobilecount.onnx")
+
 
 class CSRNetDensityEstimator:
-    def __init__(self) -> None:
-        self.torch = get_torch()
-        self.device = get_torch_device()
-        self.model, self.load_error = load_torch_module(__file__, "csrnet_final.pth")
-        self.enabled = self.torch is not None and self.model is not None
+    """
+    DirectML-Accelerated Lightweight Density Estimator (MobileCount).
+    Replaces the heavy legacy VGG-16 PyTorch CSRNet implementation.
+    """
+
+    def __init__(self, model_path: str = DEFAULT_MOBILECOUNT_PATH) -> None:
+        self.model_path = model_path
+        self.engine: Optional[DirectMLInferenceEngine] = None
+        self.enabled = False
+        self.load_error: Optional[str] = None
+
+        try:
+            if os.path.exists(self.model_path):
+                self.engine = DirectMLInferenceEngine(self.model_path, device_id=0)
+                self.enabled = True
+            else:
+                self.load_error = f"Model not found at: {self.model_path}"
+        except Exception as err:
+            self.load_error = str(err)
+            print(f"[density-estimator] DirectML initialization warning: {err}")
 
     def _build_default(self, tracks: List[Dict], current_count: int, used_density: bool = False) -> Dict:
         return {
             "density_count": int(max(current_count, 0)),
             "density_map": [],
             "density_context": {
-                "model": "CSRNet",
+                "model": "MobileCount-DirectML",
                 "enabled": self.enabled,
                 "used_density": used_density,
                 "track_count": len(tracks),
@@ -33,75 +53,43 @@ class CSRNetDensityEstimator:
             },
         }
 
-    def _prepare_tensor(self, frame: Any):
-        resized = cv2.resize(frame, (CSRNET_INPUT_WIDTH, CSRNET_INPUT_HEIGHT))
-        normalized = resized.astype(np.float32) / 255.0
-        chw = np.transpose(normalized, (2, 0, 1))
-        tensor = self.torch.from_numpy(chw).unsqueeze(0).to(self.device)
-        return tensor, frame.shape[:2]
-
-    @staticmethod
-    def _resize_density_map(density_array: np.ndarray, frame_width: int, frame_height: int) -> np.ndarray:
-        resized_density = cv2.resize(
-            density_array,
-            (frame_width, frame_height),
-            interpolation=cv2.INTER_CUBIC,
-        )
-        return np.maximum(resized_density, 0.0).astype(np.float32)
-
-    @staticmethod
-    def _extract_density_array(output: Any) -> np.ndarray:
-        if isinstance(output, (list, tuple)) and output:
-            output = output[0]
-        if hasattr(output, "detach"):
-            output = output.detach().cpu().numpy()
-        array = np.asarray(output, dtype=np.float32)
-        array = np.squeeze(array)
-        if array.ndim == 0:
-            array = np.array([[float(array)]], dtype=np.float32)
-        elif array.ndim == 1:
-            array = array.reshape(1, -1)
-        return np.maximum(array, 0.0)
-
     def infer(self, frame: Any) -> Dict[str, Any]:
         if frame is None:
             raise ValueError("frame is required")
-        if not self.enabled:
-            raise RuntimeError(self.load_error or "csrnet_unavailable")
+        if not self.enabled or self.engine is None:
+            raise RuntimeError(self.load_error or "density_engine_unavailable")
 
-        tensor, frame_shape = self._prepare_tensor(frame)
-        with self.torch.no_grad():
-            output = self.model(tensor)
+        # Prepare 640x640 tensor
+        resized = cv2.resize(frame, (640, 640))
+        chw = np.transpose(resized.astype(np.float32) / 255.0, (2, 0, 1))
+        batch_tensor = np.expand_dims(chw, axis=0)
 
-        density_array = self._extract_density_array(output)
-        frame_height, frame_width = frame_shape
-        resized_density = self._resize_density_map(density_array, frame_width, frame_height)
+        output = self.engine.infer_batch(batch_tensor)
+        density_array = np.squeeze(output)
+
+        count = max(int(round(float(density_array.sum()))), 0)
+        h, w = frame.shape[:2]
+        resized_density = cv2.resize(density_array, (w, h), interpolation=cv2.INTER_CUBIC)
+
         return {
-            "count": max(int(round(float(density_array.sum()))), 0),
-            "density_map": resized_density,
-            "input_size": [CSRNET_INPUT_WIDTH, CSRNET_INPUT_HEIGHT],
+            "count": count,
+            "density_map": np.maximum(resized_density, 0.0).astype(np.float32),
+            "input_size": [640, 640],
         }
 
     def predict(self, frame: Any, tracks: List[Dict], current_count: int) -> Dict:
         default = self._build_default(tracks, current_count, used_density=False)
-        if frame is None:
-            return default
-
-        if not self.enabled:
+        if frame is None or not self.enabled or self.engine is None:
             return default
 
         try:
-            tensor, frame_shape = self._prepare_tensor(frame)
-            with self.torch.no_grad():
-                output = self.model(tensor)
+            h, w = frame.shape[:2]
+            res = self.infer(frame)
+            density_count = res["count"]
+            density_map = res["density_map"]
 
-            density_array = self._extract_density_array(output)
-            density_count = int(round(float(density_array.sum())))
-
-            frame_height, frame_width = frame_shape
-            resized_density = self._resize_density_map(density_array, frame_width, frame_height)
             normalized_density = cv2.normalize(
-                resized_density,
+                density_map,
                 None,
                 alpha=0.0,
                 beta=1.0,
@@ -116,14 +104,14 @@ class CSRNetDensityEstimator:
                 "density_count": max(density_count, 0),
                 "density_map": compact_map.astype(np.float32).round(4).tolist(),
                 "density_context": {
-                    "model": "CSRNet",
+                    "model": "MobileCount-DirectML",
                     "enabled": True,
                     "used_density": True,
                     "track_count": len(tracks),
-                    "input_size": [CSRNET_INPUT_WIDTH, CSRNET_INPUT_HEIGHT],
-                    "frame_size": [frame_width, frame_height],
+                    "input_size": [640, 640],
+                    "frame_size": [w, h],
                     "map_size": [DENSITY_MAP_OUTPUT_WIDTH, DENSITY_MAP_OUTPUT_HEIGHT],
-                    "load_error": self.load_error,
+                    "load_error": None,
                 },
             }
         except Exception as error:

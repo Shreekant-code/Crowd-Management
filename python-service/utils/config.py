@@ -1,11 +1,12 @@
 import os
 
-YOLO_MODEL = os.getenv("YOLO_MODEL", "yolov8n.pt")
+YOLO_MODEL = os.getenv("YOLO_MODEL", "models/yolov8n-head.onnx")
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.20"))
 YOLO_IMAGE_SIZE = int(os.getenv("YOLO_IMAGE_SIZE", "640"))
 FRAME_SKIP = int(os.getenv("FRAME_SKIP", "1"))
-STREAM_TARGET_FPS = float(os.getenv("STREAM_TARGET_FPS", "15"))
-MAX_ACTIVE_JOBS = int(os.getenv("AI_MAX_ACTIVE_JOBS", "2"))
+STREAM_TARGET_FPS = float(os.getenv("STREAM_TARGET_FPS", "2.0"))
+ENABLE_GSTREAMER_D3D11 = os.getenv("ENABLE_GSTREAMER_D3D11", "true").lower() == "true"
+MAX_ACTIVE_JOBS = int(os.getenv("AI_MAX_ACTIVE_JOBS", "12"))
 OVERCROWD_THRESHOLD = int(os.getenv("OVERCROWD_THRESHOLD", "25"))
 SUDDEN_SPIKE_THRESHOLD = int(os.getenv("SUDDEN_SPIKE_THRESHOLD", "8"))
 HEATMAP_HISTORY = int(os.getenv("HEATMAP_HISTORY", "250"))
