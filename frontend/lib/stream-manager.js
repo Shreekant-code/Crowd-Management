@@ -201,10 +201,10 @@ export function useStreamManager({ camera, onLiveMetricsChange }) {
 
   useEffect(() => {
     setRetrySeed(0);
-    setStreamMode(STREAM_MODES.WEBRTC);
+    setStreamMode(STREAM_MODES.PREVIEW);
 
     if (camera?.status === "running") {
-      setStatus(STREAM_STATES.CONNECTING);
+      setStatus(STREAM_STATES.FALLBACK_PREVIEW);
     } else {
       setStatus(STREAM_STATES.IDLE);
     }

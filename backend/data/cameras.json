@@ -23,7 +23,7 @@
       "heatmap_points": [],
       "line_crossing": {
         "entry": 0,
-        "exit": 1
+        "exit": 0
       },
       "zone_counts": {
         "left": 0,
@@ -45,7 +45,7 @@
       "risk": "Low",
       "risk_score": 0,
       "processing_status": "warming_up",
-      "updatedAt": "2026-08-27T04:16:53.870Z",
+      "updatedAt": "2026-08-27T04:29:33.179Z",
       "stream_resolution_status": "youtube_resolved",
       "stream_resolution_error": null,
       "webrtc_url": "http://localhost:8889/cam_6e166aa4-7959-4065-9a30-fadcc98d6f44/whep",
@@ -81,7 +81,15 @@
             0,
             0,
             0,
+            0,
+            0
+          ],
+          [
+            0,
+            0.5,
+            0,
             1,
+            0,
             0
           ],
           [
@@ -89,14 +97,6 @@
             0,
             0,
             0,
-            0,
-            0
-          ],
-          [
-            1,
-            0,
-            0,
-            1,
             0,
             0
           ],
@@ -119,84 +119,143 @@
         ],
         "sparse_detections": [
           {
-            "id": 10,
+            "id": 1,
             "point": [
-              1023,
-              625
+              811,
+              249
+            ],
+            "point_norm": [
+              0.6336,
+              0.3455
             ],
             "bbox": [
-              975,
-              483,
-              96,
-              285
+              794,
+              236,
+              34,
+              116
+            ],
+            "bbox_norm": [
+              0.6203,
+              0.3278,
+              0.0266,
+              0.1611
             ],
             "bbox_xyxy": [
-              975,
-              483,
-              1071,
-              768
+              794,
+              236,
+              828,
+              352
             ],
-            "confidence": 0.825
+            "confidence": 0.777
           },
           {
             "id": 2,
             "point": [
-              1567,
-              351
+              840,
+              251
+            ],
+            "point_norm": [
+              0.6562,
+              0.3489
             ],
             "bbox": [
-              1551,
-              309,
-              33,
-              84
+              822,
+              238,
+              36,
+              120
+            ],
+            "bbox_norm": [
+              0.6422,
+              0.3306,
+              0.0281,
+              0.1667
             ],
             "bbox_xyxy": [
-              1551,
-              309,
-              1584,
-              393
+              822,
+              238,
+              858,
+              358
             ],
-            "confidence": 0.395
+            "confidence": 0.772
           },
           {
-            "id": 8,
+            "id": 3,
             "point": [
-              27,
-              603
+              362,
+              262
+            ],
+            "point_norm": [
+              0.2828,
+              0.3641
             ],
             "bbox": [
-              0,
-              354,
-              54,
-              498
+              344,
+              256,
+              36,
+              56
+            ],
+            "bbox_norm": [
+              0.2687,
+              0.3556,
+              0.0281,
+              0.0778
             ],
             "bbox_xyxy": [
-              0,
-              354,
-              54,
-              852
+              344,
+              256,
+              380,
+              312
             ],
-            "confidence": 0.3
+            "confidence": 0.25
           }
         ],
         "dense_detections": [],
-        "avg_inter_head_distance": 1055.28,
+        "avg_inter_head_distance": 318.79,
         "hotspot_regions": []
       },
-      "trend_direction": "DISPERSING",
-      "growth_rate_per_min": -0.6,
-      "forecaster_latency_ms": 0.08,
-      "updated_at": "2026-08-27T04:16:53Z",
+      "trend_direction": "SURGING",
+      "growth_rate_per_min": 3.18,
+      "forecaster_latency_ms": 0.042,
+      "updated_at": "2026-08-27T04:29:32Z",
       "density_mode": false,
       "sparse_ratio": 1,
       "dense_ratio": 0,
       "overlap_ratio": 0,
       "camera_id": "6e166aa4-7959-4065-9a30-fadcc98d6f44",
       "userId": "e57605de-ba09-43a5-90c1-ee2d135be57c",
-      "zoneName": "Z1"
+      "zoneName": "Z1",
+      "head_count": 3,
+      "head_points": [
+        [
+          811,
+          249
+        ],
+        [
+          840,
+          251
+        ],
+        [
+          362,
+          262
+        ]
+      ],
+      "head_points_norm": [
+        [
+          0.6336,
+          0.3455
+        ],
+        [
+          0.6562,
+          0.3489
+        ],
+        [
+          0.2828,
+          0.3641
+        ]
+      ]
     },
     "webrtcUrl": "http://localhost:8889/cam_6e166aa4-7959-4065-9a30-fadcc98d6f44/whep",
-    "lastStartedAt": "2026-08-27T04:14:24.288Z",
-    "lastFrameAt": "2026-08-27T04:16:53.870Z"
+    "lastStartedAt": "2026-08-27T04:28:02.154Z",
+    "lastFrameAt": "2026-08-27T04:29:33.179Z"
   }
 ]

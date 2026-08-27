@@ -93,7 +93,7 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const boundsRef = useRef({ width: 960, height: 540, videoWidth: 960, videoHeight: 540 });
-  const [overlayMode, setOverlayMode] = useState("both"); // "both" | "boxes" | "points" | "off"
+  const [overlayMode, setOverlayMode] = useState("off"); // "off" | "boxes" | "points" | "both"
 
   const {
     status: streamStatus,

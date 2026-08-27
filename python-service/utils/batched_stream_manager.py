@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Any, Dict, List, Optional
+import cv2
 import numpy as np
 import requests
 
@@ -27,8 +27,9 @@ class BatchedStreamManager:
     2. Runs a single unified 2 FPS cadence loop (500 ms per cycle).
     3. Batches all active frames into a single tensor (Batch=N, 3, 640, 640).
     4. Executes single-pass P2PNet inference on AMD Radeon 610M (DirectML).
-    5. Computes 1D temporal forecasts (<0.05 ms) per stream with isolated history.
-    6. Pushes a single consolidated JSON telemetry payload to Express backend.
+    5. Burns luminous orange head points directly onto server-side frames.
+    6. Delivers live annotated MJPEG stream to frontend with zero client compute.
+    7. Pushes consolidated JSON telemetry payload to Express backend.
     """
 
     def __init__(self, backend_url: Optional[str] = None) -> None:
@@ -39,6 +40,7 @@ class BatchedStreamManager:
         self.analytics: Dict[str, AnalyticsEngine] = {}
         self.forecasters: Dict[str, CrowdForecaster] = {}
         self.latest_telemetry: Dict[str, Dict[str, Any]] = {}
+        self.latest_annotated_jpegs: Dict[str, bytes] = {}
         
         self.detector = PersonDetector()
         self.lock = threading.Lock()
@@ -149,13 +151,33 @@ class BatchedStreamManager:
                     batch_telemetry: Dict[str, Dict[str, Any]] = {}
                     
                     with self.lock:
-                        for cam_id in camera_ids:
+                        for idx, cam_id in enumerate(camera_ids):
                             res = batch_results.get(cam_id, {})
                             detections = res.get("detections", [])
                             tracker = self.trackers.get(cam_id)
                             analytics = self.analytics.get(cam_id)
                             forecaster = self.forecasters.get(cam_id)
                             info = self.streams.get(cam_id, {})
+
+                            # Burn luminous glowing head focal points directly onto the video frame
+                            orig_frame = frames[idx] if idx < len(frames) else None
+                            if orig_frame is not None:
+                                annotated_frame = orig_frame.copy()
+                                for det in detections:
+                                    pt = det.get("point")
+                                    if pt and len(pt) >= 2:
+                                        px, py = int(pt[0]), int(pt[1])
+                                        if px > 0 and py > 0:
+                                            # Luminous outer aura
+                                            cv2.circle(annotated_frame, (px, py), 7, (0, 140, 255), -1, cv2.LINE_AA)
+                                            # Bright solid core
+                                            cv2.circle(annotated_frame, (px, py), 4, (0, 220, 255), -1, cv2.LINE_AA)
+                                            # High-contrast pinpoint
+                                            cv2.circle(annotated_frame, (px, py), 1, (255, 255, 255), -1, cv2.LINE_AA)
+
+                                ok, jpeg_buf = cv2.imencode(".jpg", annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+                                if ok:
+                                    self.latest_annotated_jpegs[cam_id] = jpeg_buf.tobytes()
 
                             if analytics:
                                 tracks = tracker.update(detections) if tracker else []
@@ -230,6 +252,10 @@ class BatchedStreamManager:
             sleep_time = max(0.01, self.cadence_interval - elapsed)
             time.sleep(sleep_time)
 
+    def get_latest_annotated_jpeg(self, camera_id: str) -> Optional[bytes]:
+        with self.lock:
+            return self.latest_annotated_jpegs.get(camera_id)
+
     def shutdown(self) -> None:
         self.stop_event.set()
         with self.lock:
@@ -243,4 +269,5 @@ class BatchedStreamManager:
             self.analytics.clear()
             self.forecasters.clear()
             self.latest_telemetry.clear()
+            self.latest_annotated_jpegs.clear()
         print("[batched-manager] Shutdown complete.")

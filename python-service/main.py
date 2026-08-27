@@ -540,37 +540,28 @@ def live(
 
 
 @app.get("/camera/{camera_id}/live")
+@app.get("/streams/{camera_id}/live")
+@app.get("/streams/{camera_id}/annotated")
 async def camera_live(
     camera_id: str,
     source: str | None = Query(None, description="RTSP/HTTP/HLS stream URL"),
     user_id: str | None = Query(None, description="Optional user identifier"),
     zone_name: str | None = Query(None, description="Optional zone label"),
 ) -> StreamingResponse:
-    if source is None or not source.strip():
-        raise HTTPException(status_code=400, detail="source query parameter is required")
-
-    normalized_source = source.strip()
-    try:
-        processor = _get_or_create_stream_processor(
-            camera_id.strip(),
-            normalized_source,
+    if source and source.strip():
+        batched_stream_manager.start_camera(
+            camera_id=camera_id.strip(),
+            stream_url=source.strip(),
             user_id=user_id,
             zone_name=zone_name,
         )
-    except RuntimeError as err:
-        raise HTTPException(status_code=429, detail=str(err))
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=str(err))
 
     async def stream_generator():
         last_frame_bytes = None
         has_sent_initial = False
         try:
-            while not processor.stop_event.is_set():
-                with processor.lock:
-                    latest_jpeg = processor.latest_jpeg
-                    status = processor.status
-
+            while True:
+                latest_jpeg = batched_stream_manager.get_latest_annotated_jpeg(camera_id)
                 if latest_jpeg and latest_jpeg != last_frame_bytes:
                     last_frame_bytes = latest_jpeg
                     has_sent_initial = True
@@ -578,18 +569,16 @@ async def camera_live(
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + latest_jpeg + b"\r\n"
                     )
-                    await asyncio.sleep(0.03)
+                    await asyncio.sleep(0.04)
                 elif not has_sent_initial:
                     has_sent_initial = True
                     yield (
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + _WARMUP_PLACEHOLDER_JPEG + b"\r\n"
                     )
-                    await asyncio.sleep(0.05)
-                elif status in {"stopped", "completed", "failed"}:
-                    break
+                    await asyncio.sleep(0.08)
                 else:
-                    await asyncio.sleep(0.03)
+                    await asyncio.sleep(0.04)
         except (GeneratorExit, asyncio.CancelledError):
             pass
 
