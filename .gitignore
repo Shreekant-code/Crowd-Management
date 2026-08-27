@@ -16,3 +16,8 @@ processed/
 *.log
 data/*.json
 .venv_wsl
+auto.crt
+auto.key
+*.pt
+debug_*.jpg
+debug_crop.jpg

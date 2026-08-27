@@ -383,15 +383,21 @@ class CrowdRuntime:
         return stabilized
 
     def _run_yolo_pipeline(self, frame: Any, frame_id: Optional[int]) -> Dict[str, Any]:
-        detections = self.detector.detect(frame)
+        det_result = self.detector.detect_with_regime(frame)
+        detections = det_result.get("detections", [])
         tracks = self.tracker.update(detections)
         analytics_result = self.analytics.update(tracks, frame, frame.shape, frame_id=frame_id)
+        analytics_result["sparse_count"] = det_result.get("sparse_count", analytics_result.get("sparse_count", len(tracks)))
+        analytics_result["dense_count"] = det_result.get("dense_count", analytics_result.get("dense_count", 0))
+        analytics_result["dominant_regime"] = det_result.get("dominant_regime", analytics_result.get("dominant_regime", "SPARSE"))
+        analytics_result["dense_clusters"] = det_result.get("dense_clusters", analytics_result.get("dense_clusters", []))
         yolo_count = len({int(track["id"]) for track in tracks})
         return {
             "detections": detections,
             "tracks": tracks,
             "count": yolo_count,
             "analytics": analytics_result,
+            "regime": det_result.get("dominant_regime", "SPARSE"),
         }
 
     def _run_csrnet(self, frame: Any) -> Dict[str, Any]:

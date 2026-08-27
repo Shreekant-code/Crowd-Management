@@ -1,6 +1,24 @@
 "use client";
 
-import { PauseCircle, PlayCircle, Trash2, TrendingUp, TrendingDown, Minus, Zap, Cpu } from "lucide-react";
+import { useState } from "react";
+import {
+  Camera,
+  Cpu,
+  Eye,
+  Grid2X2,
+  Grid3X3,
+  LayoutGrid,
+  Maximize2,
+  PauseCircle,
+  PlayCircle,
+  Radio,
+  Search,
+  Sparkles,
+  Trash2,
+  TrendingDown,
+  TrendingUp,
+  Zap,
+} from "lucide-react";
 import { CameraFeed } from "@/components/camera-feed";
 import { changeCameraState, deleteCamera } from "@/lib/api";
 import { riskClass } from "@/lib/risk";
@@ -23,58 +41,55 @@ function getTrendBadge(trend = "STABLE", growthRate = 0) {
     return {
       label: `Surging (${rateStr})`,
       icon: TrendingUp,
-      tone: "bg-red-50 text-red-700 border-red-200",
+      tone: "bg-red-500/20 text-red-300 border-red-500/40",
     };
   }
   if (normalized === "ACCUMULATING") {
     return {
       label: `Accumulating (${rateStr})`,
       icon: TrendingUp,
-      tone: "bg-amber-50 text-amber-700 border-amber-200",
+      tone: "bg-amber-500/20 text-amber-300 border-amber-500/40",
     };
   }
   if (normalized === "DISPERSING") {
     return {
       label: `Dispersing (${rateStr})`,
       icon: TrendingDown,
-      tone: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      tone: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
     };
   }
   return {
-    label: "Stable",
-    icon: Minus,
-    tone: "bg-slate-50 text-slate-600 border-slate-200",
+    label: `Stable (${rateStr || "Nominal"})`,
+    icon: Sparkles,
+    tone: "bg-teal-500/20 text-teal-300 border-teal-500/40",
   };
 }
 
-export function CameraGrid({ cameras = [], onCameraChanged, onCameraLiveUpdate }) {
-  function getRiskBar(camera) {
-    if (camera.metrics?.risk === "Critical") {
-      return "from-red-500 to-orange-400";
-    }
-    if (camera.metrics?.risk === "High") {
-      return "from-orange-500 to-amber-400";
-    }
-    if (camera.metrics?.risk === "Medium") {
-      return "from-amber-400 to-yellow-300";
-    }
-    return "from-emerald-400 to-teal-400";
-  }
+function getRiskBar(camera = {}) {
+  const risk = camera.metrics?.risk || "Low";
+  if (risk === "Critical") return "from-red-500 via-rose-500 to-red-600";
+  if (risk === "High") return "from-red-500 via-amber-500 to-orange-500";
+  if (risk === "Medium") return "from-amber-500 via-yellow-500 to-emerald-500";
+  return "from-teal-500 via-emerald-500 to-cyan-500";
+}
+
+export function CameraGrid({
+  cameras = [],
+  onCameraChanged,
+  onInspectCamera,
+  onCameraLiveUpdate,
+  onAddCamera,
+}) {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterMode, setFilterMode] = useState("ALL"); // ALL | RUNNING | RISK | DENSE
+  const [layoutCols, setLayoutCols] = useState(3); // 1 | 2 | 3
 
   async function handleAction(id, action) {
     try {
       if (action === "delete") {
         await deleteCamera(id);
-        if (onCameraChanged) {
-          await onCameraChanged();
-        }
-        return;
-      }
-
-      const result = await changeCameraState(id, action);
-      if (result?.camera && onCameraChanged) {
-        onCameraChanged(result.camera);
-        return;
+      } else {
+        await changeCameraState(id, action);
       }
       if (onCameraChanged) {
         await onCameraChanged();
@@ -84,178 +99,304 @@ export function CameraGrid({ cameras = [], onCameraChanged, onCameraLiveUpdate }
     }
   }
 
+  // Filter cameras
+  const filteredCameras = cameras.filter((camera) => {
+    const matchesSearch =
+      (camera.zoneName || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (camera.name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (camera.location || "").toLowerCase().includes(searchTerm.toLowerCase());
+
+    if (!matchesSearch) return false;
+
+    if (filterMode === "RUNNING") return camera.status === "running";
+    if (filterMode === "RISK") return ["High", "Critical"].includes(camera.metrics?.risk);
+    if (filterMode === "DENSE") return camera.metrics?.dominant_regime === "DENSE" || Boolean(camera.metrics?.density_mode);
+
+    return true;
+  });
+
   if (!cameras.length) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-        No cameras registered yet. Add an RTSP or media stream to create your first surveillance zone.
+      <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-slate-800 bg-slate-900/70 p-12 text-center text-sm text-slate-300 backdrop-blur-2xl">
+        <Radio className="mx-auto h-12 w-12 text-teal-400 animate-pulse mb-3" />
+        <p className="text-xl font-extrabold text-white">No Surveillance Feeds Registered</p>
+        <p className="mt-1.5 text-xs text-slate-300 max-w-md mx-auto leading-relaxed">
+          Add an RTSP or HTTP camera stream, or use the Viva Presentation Simulator to inject instant test streams.
+        </p>
+        {onAddCamera && (
+          <button
+            onClick={onAddCamera}
+            type="button"
+            className="mt-6 inline-flex items-center gap-2 rounded-xl bg-white hover:bg-slate-100 text-slate-950 font-black px-6 py-3 text-xs shadow-xl shadow-white/20 hover:scale-105 active:scale-95 transition-all duration-200 cursor-pointer border border-white/80"
+          >
+            Add First Surveillance Zone
+          </button>
+        )}
       </div>
     );
   }
 
-  return (
-    <div className="grid gap-6 xl:grid-cols-3 xl:auto-rows-fr">
-      {cameras.map((camera) => {
-        const liveCount = getLiveCount(camera);
-        const forecastCount = camera.metrics?.prediction_10min_count ?? camera.metrics?.predicted_crowd ?? liveCount;
-        const trend = getTrendBadge(camera.metrics?.trend_direction, camera.metrics?.growth_rate_per_min);
-        const TrendIcon = trend.icon;
-        const isDensityMode = Boolean(camera.metrics?.density_mode);
-        const overlapPercent = Math.round((camera.metrics?.overlap_ratio ?? camera.metrics?.crowd_features?.congestion_score ?? 0) * 100);
+  const gridClass =
+    layoutCols === 1
+      ? "grid gap-6 grid-cols-1"
+      : layoutCols === 2
+      ? "grid gap-6 md:grid-cols-2"
+      : "grid gap-6 xl:grid-cols-3";
 
-        return (
-          <article key={camera.id} className="flex h-full min-h-[40rem] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className={`h-2 bg-gradient-to-r ${getRiskBar(camera)}`} />
-            <div className="flex h-full flex-col space-y-5 p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-lg font-semibold text-slate-950">{camera.zoneName}</p>
-                  <p className="text-sm text-slate-500">{camera.name}</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                      {camera.sourceType || "source"}
-                    </span>
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                      {camera.status}
-                    </span>
-                    {isDensityMode ? (
-                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">
-                        MobileCount Sub-Batch
+  return (
+    <div className="space-y-6">
+      {/* Grid Controls Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900/90 p-4 shadow-xl backdrop-blur-2xl">
+        {/* Search Input */}
+        <div className="relative min-w-[240px] flex-1 sm:max-w-xs">
+          <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search zones, locations..."
+            className="w-full rounded-xl border border-slate-800 bg-slate-950/90 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 outline-none transition focus:border-teal-400 focus:ring-1 focus:ring-teal-400"
+          />
+        </div>
+
+        {/* Filter Pills */}
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          {[
+            { id: "ALL", label: `All Feeds (${cameras.length})` },
+            { id: "RUNNING", label: `Active (${cameras.filter((c) => c.status === "running").length})` },
+            { id: "RISK", label: `High Risk (${cameras.filter((c) => ["High", "Critical"].includes(c.metrics?.risk)).length})` },
+            { id: "DENSE", label: "Dense Clusters" },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setFilterMode(tab.id)}
+              type="button"
+              className={`rounded-xl px-3.5 py-1.5 font-bold transition ${
+                filterMode === tab.id
+                  ? "bg-teal-500/20 text-teal-300 border border-teal-500/40 shadow-sm"
+                  : "bg-slate-950/70 text-slate-400 hover:text-white border border-slate-800"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Layout Switcher */}
+        <div className="hidden sm:flex items-center gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1">
+          <button
+            onClick={() => setLayoutCols(3)}
+            type="button"
+            className={`rounded-lg p-1.5 transition ${layoutCols === 3 ? "bg-slate-800 text-teal-400" : "text-slate-500 hover:text-white"}`}
+            title="3 Columns"
+          >
+            <Grid3X3 className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setLayoutCols(2)}
+            type="button"
+            className={`rounded-lg p-1.5 transition ${layoutCols === 2 ? "bg-slate-800 text-teal-400" : "text-slate-500 hover:text-white"}`}
+            title="2 Columns"
+          >
+            <Grid2X2 className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setLayoutCols(1)}
+            type="button"
+            className={`rounded-lg p-1.5 transition ${layoutCols === 1 ? "bg-slate-800 text-teal-400" : "text-slate-500 hover:text-white"}`}
+            title="Single Focus"
+          >
+            <LayoutGrid className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Main Camera Cards Grid */}
+      <div className={gridClass}>
+        {filteredCameras.map((camera) => {
+          const liveCount = getLiveCount(camera);
+          const forecastCount = camera.metrics?.prediction_10min_count ?? camera.metrics?.predicted_crowd ?? liveCount;
+          const trend = getTrendBadge(camera.metrics?.trend_direction, camera.metrics?.growth_rate_per_min);
+          const TrendIcon = trend.icon;
+          const isDensityMode = Boolean(camera.metrics?.density_mode);
+          const overlapPercent = Math.round((camera.metrics?.overlap_ratio ?? camera.metrics?.crowd_features?.congestion_score ?? 0) * 100);
+          const inferenceMs = camera.metrics?.inference_ms ? Math.round(camera.metrics.inference_ms) : 24;
+
+          return (
+            <article
+              key={camera.id}
+              className="flex flex-col overflow-hidden rounded-3xl border border-slate-800 bg-slate-900/90 shadow-2xl backdrop-blur-2xl transition-all duration-300 hover:border-slate-700 hover:shadow-cyan-950/20"
+            >
+              {/* Glowing Risk Accent Top Bar */}
+              <div className={`h-1.5 bg-gradient-to-r ${getRiskBar(camera)}`} />
+
+              <div className="flex flex-col space-y-4 p-5">
+                {/* Card Title & Badges */}
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-extrabold text-white">{camera.zoneName}</h3>
+                    <p className="text-xs text-slate-300 font-medium">{camera.name} • {camera.location || "Main Venue"}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-300">
+                        {camera.sourceType || "source"}
                       </span>
-                    ) : (
-                      <span className="rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-teal-700">
-                        YOLOv8 Head
+                      <span className={`rounded-lg border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                        camera.status === "running" ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300" : "border-slate-800 bg-slate-950 text-slate-400"
+                      }`}>
+                        {camera.status}
                       </span>
+                      {isDensityMode ? (
+                        <span className="rounded-lg border border-amber-500/40 bg-amber-500/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300">
+                          MobileCount Dense
+                        </span>
+                      ) : (
+                        <span className="rounded-lg border border-teal-500/40 bg-teal-500/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-teal-300">
+                          YOLOv8 Head
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col items-end gap-1.5">
+                    <span className={riskClass(camera.metrics?.risk)}>
+                      {camera.metrics?.risk || "Low"}
+                    </span>
+                    {onInspectCamera && (
+                      <button
+                        onClick={() => onInspectCamera(camera)}
+                        type="button"
+                        className="inline-flex items-center gap-1 text-[11px] font-bold text-teal-400 transition hover:text-teal-300"
+                      >
+                        <Maximize2 className="h-3 w-3" />
+                        Spotlight
+                      </button>
                     )}
                   </div>
                 </div>
-                <span className={`${riskClass(camera.metrics?.risk)} rounded-full`}>
-                  {camera.metrics?.risk || "Low"}
-                </span>
-              </div>
 
-              {/* Video Feed Component with 60 FPS LERP Canvas */}
-              <div className="rounded-2xl bg-slate-950 p-4 text-white">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs uppercase tracking-[0.18em] text-white/55">Zone Feed (WebRTC)</p>
-                  <p className="text-xs text-white/55">{camera.status}</p>
+                {/* Video Feed Component with 60 FPS LERP Canvas */}
+                <div className="overflow-hidden rounded-2xl bg-slate-950 p-3 shadow-inner border border-slate-800/80">
+                  <div className="flex items-center justify-between pb-1.5 text-xs text-slate-300">
+                    <span className="inline-flex items-center gap-1.5 text-teal-400 font-bold text-[11px]">
+                      <Radio className="h-3 w-3 animate-pulse" />
+                      WebRTC WHEP Stream
+                    </span>
+                    <span className="text-[11px] font-semibold text-slate-400">{camera.status}</span>
+                  </div>
+                  <CameraFeed camera={camera} compact onLiveMetricsChange={onCameraLiveUpdate} />
                 </div>
-                <CameraFeed camera={camera} compact onLiveMetricsChange={onCameraLiveUpdate} />
-              </div>
 
-              {/* Analytics & Zone Summary Grid */}
-              <div className="grid flex-1 gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(260px,0.9fr)]">
-                {/* Local Analytics Panel */}
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="flex items-center justify-between gap-4">
+                {/* Analytics & Zone Summary Grid */}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {/* Local Analytics Panel */}
+                  <div className="flex flex-col justify-between rounded-2xl border border-slate-800 bg-slate-950/80 p-3.5">
                     <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Local Analytics</p>
-                      <div className="mt-1.5 flex items-center gap-1.5">
-                        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${trend.tone}`}>
-                          <TrendIcon className="h-3 w-3" />
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Zone Heads</span>
+                        <span className={`inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[10px] font-bold ${trend.tone}`}>
+                          <TrendIcon className="h-2.5 w-2.5" />
                           {trend.label}
                         </span>
                       </div>
+                      <div className="mt-2 flex items-baseline justify-between">
+                        <span className="text-3xl font-extrabold text-white">{liveCount}</span>
+                        <span className="text-xs text-indigo-400 font-bold">10m: {forecastCount}</span>
+                      </div>
                     </div>
-                    <div className="rounded-2xl bg-white px-4 py-2.5 text-right shadow-sm">
-                      <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Head Count</p>
-                      <span className="text-2xl font-bold text-slate-950">{liveCount}</span>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2 border-t border-slate-800 pt-2 text-[11px]">
+                      <div>
+                        <span className="text-slate-400 text-[10px]">DirectML Latency</span>
+                        <p className="font-bold text-teal-400">{inferenceMs} ms</p>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 text-[10px]">Congestion Drag</span>
+                        <p className="font-bold text-white">{overlapPercent}%</p>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="mt-3.5 grid gap-2.5 sm:grid-cols-2">
-                    <div className="rounded-xl bg-white p-3 shadow-sm">
-                      <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Current</p>
-                      <p className="mt-1 text-lg font-semibold text-slate-950">{liveCount}</p>
-                    </div>
-                    <div className="rounded-xl bg-white p-3 shadow-sm">
-                      <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">10-Min Forecast</p>
-                      <p className="mt-1 text-lg font-semibold text-slate-950">{forecastCount}</p>
-                    </div>
-                    <div className="rounded-xl bg-white p-3 shadow-sm">
-                      <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">DirectML Latency</p>
-                      <p className="mt-1 text-sm font-semibold text-slate-950">
-                        {camera.metrics?.inference_ms ? Math.round(camera.metrics.inference_ms) : 24} ms
-                      </p>
-                    </div>
-                    <div className="rounded-xl bg-white p-3 shadow-sm">
-                      <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Congestion</p>
-                      <p className="mt-1 text-sm font-semibold text-slate-950">{overlapPercent}%</p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Zone Summary Panel */}
-                <div className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Zone Summary</p>
-                    <div className="mt-3 space-y-2 text-sm text-slate-700">
-                      <div className="flex items-center justify-between">
-                        <span>Left Sector</span>
-                        <span className="font-semibold text-slate-950">{camera.metrics?.zone_counts?.left ?? 0}</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span>Center Sector</span>
-                        <span className="font-semibold text-slate-950">{camera.metrics?.zone_counts?.center ?? 0}</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span>Right Sector</span>
-                        <span className="font-semibold text-slate-950">{camera.metrics?.zone_counts?.right ?? 0}</span>
-                      </div>
-                      <div className="flex items-center justify-between border-t border-slate-200 pt-2 text-xs text-slate-500">
-                        <span>Flow (Entry / Exit)</span>
-                        <span className="font-medium text-slate-900">
-                          {camera.metrics?.line_crossing?.entry ?? 0} in / {camera.metrics?.line_crossing?.exit ?? 0} out
+                  {/* Zone Summary & Flow */}
+                  <div className="flex flex-col justify-between rounded-2xl border border-slate-800 bg-slate-950/80 p-3.5">
+                    <div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Crowd Regime</span>
+                        <span className={`rounded-lg px-2 py-0.5 text-[10px] font-bold uppercase ${
+                          (camera.metrics?.dominant_regime === "DENSE" || (camera.metrics?.dense_count ?? 0) > 10)
+                            ? "bg-red-500/20 text-red-300 border border-red-500/40"
+                            : "bg-teal-500/20 text-teal-300 border border-teal-500/40"
+                        }`}>
+                          {camera.metrics?.dominant_regime || "SPARSE"}
                         </span>
                       </div>
-                    </div>
-                  </div>
 
-                  <div className="mt-3 border-t border-slate-200 pt-2.5">
-                    <div className="flex items-center justify-between text-xs text-slate-600">
-                      <span className="inline-flex items-center gap-1">
-                        <Cpu className="h-3.5 w-3.5 text-teal-600" />
-                        AMD VCN Ingestion
+                      <div className="mt-2 space-y-1 text-xs text-slate-200">
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Sparse Heads</span>
+                          <span className="font-bold text-white">{camera.metrics?.sparse_count ?? liveCount}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Dense Clusters</span>
+                          <span className="font-bold text-white">{camera.metrics?.dense_count ?? 0}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 border-t border-slate-800 pt-2 text-[11px] text-slate-300 flex items-center justify-between">
+                      <span className="text-slate-400">Flow</span>
+                      <span className="font-bold text-emerald-400">
+                        +{camera.metrics?.line_crossing?.entry ?? 0} in <span className="text-slate-400 font-normal">/</span> -{camera.metrics?.line_crossing?.exit ?? 0} out
                       </span>
-                      <span className="font-semibold text-teal-700">2 FPS Decimated</span>
                     </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Action Buttons */}
-              <div className="flex items-center gap-2 pt-1">
-                {camera.status !== "running" ? (
+                {/* Card Action Controls */}
+                <div className="flex items-center gap-2.5 pt-2 border-t border-slate-800">
+                  {camera.status !== "running" ? (
+                    <button
+                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-extrabold px-4 py-2.5 text-xs shadow-lg shadow-emerald-950/40 hover:scale-[1.02] active:scale-95 transition-all duration-200 cursor-pointer"
+                      onClick={() => handleAction(camera.id, "start")}
+                      type="button"
+                    >
+                      <PlayCircle className="h-4 w-4" />
+                      Start Feeds
+                    </button>
+                  ) : (
+                    <button
+                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-extrabold px-4 py-2.5 text-xs shadow-lg shadow-amber-950/40 hover:scale-[1.02] active:scale-95 transition-all duration-200 cursor-pointer"
+                      onClick={() => handleAction(camera.id, "stop")}
+                      type="button"
+                    >
+                      <PauseCircle className="h-4 w-4" />
+                      Stop Feeds
+                    </button>
+                  )}
+
+                  {onInspectCamera && (
+                    <button
+                      className="inline-flex items-center justify-center rounded-xl border border-slate-700 bg-slate-800 p-2.5 text-teal-300 hover:text-white hover:bg-slate-700 transition cursor-pointer"
+                      onClick={() => onInspectCamera(camera)}
+                      type="button"
+                      title="Spotlight View"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </button>
+                  )}
+
                   <button
-                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700"
-                    onClick={() => handleAction(camera.id, "start")}
+                    className="inline-flex items-center justify-center rounded-xl border border-slate-700 bg-slate-800 p-2.5 text-slate-400 hover:border-red-500/50 hover:bg-red-500/20 hover:text-red-300 transition cursor-pointer"
+                    onClick={() => handleAction(camera.id, "delete")}
                     type="button"
+                    title="Delete Camera"
                   >
-                    <PlayCircle className="h-4 w-4" />
-                    Start Zone
+                    <Trash2 className="h-4 w-4" />
                   </button>
-                ) : (
-                  <button
-                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-amber-600"
-                    onClick={() => handleAction(camera.id, "stop")}
-                    type="button"
-                  >
-                    <PauseCircle className="h-4 w-4" />
-                    Stop Zone
-                  </button>
-                )}
-                <button
-                  className="inline-flex items-center justify-center rounded-xl border border-slate-200 px-3.5 py-2.5 text-slate-600 transition hover:bg-red-50 hover:text-red-600 hover:border-red-200"
-                  onClick={() => handleAction(camera.id, "delete")}
-                  type="button"
-                  title="Delete Camera"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                </div>
               </div>
-            </div>
-          </article>
-        );
-      })}
+            </article>
+          );
+        })}
+      </div>
     </div>
   );
 }

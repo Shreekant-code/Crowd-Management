@@ -2,20 +2,52 @@
 
 import { useEffect, useState } from "react";
 import {
+  Activity,
+  AlertTriangle,
+  BrainCircuit,
+  Compass,
+  Cpu,
+  Eye,
+  FileText,
+  Film,
+  Grid,
+  Layers,
+  LayoutDashboard,
   LogOut,
-  Radar,
-  RefreshCw,
+  Maximize2,
+  Navigation,
   Plus,
+  Radio,
+  RefreshCw,
+  ShieldAlert,
+  ShieldCheck,
+  Siren,
+  Sliders,
+  Sparkles,
+  Tv,
+  Users,
+  Volume2,
+  VolumeX,
   X,
-  Video,
+  Zap,
 } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { getSocket } from "@/lib/socket";
 import { getDashboardData } from "@/lib/api";
-import { CameraForm } from "./camera-form";
+import { playAlertChime } from "@/lib/audio-alerts";
+import { riskClass } from "@/lib/risk";
+
+import { TopAlertBanner } from "./top-alert-banner";
+import { SummaryCards } from "./summary-cards";
 import { CameraGrid } from "./camera-grid";
-import { GlobalAnalyticsPanel } from "./global-analytics-panel";
-import { GlobalPredictionPanel } from "./global-prediction-panel";
+import { VenueMap } from "./venue-map";
+import { AnalyticsStudio } from "./analytics-studio";
+import { IncidentCenter } from "./incident-center";
+import { UploadPanel } from "./upload-panel";
+import { CameraSpotlightModal } from "./camera-spotlight-modal";
+import { DemoSimulator } from "./demo-simulator";
+import { ReportExportModal } from "./report-export.js";
+import { CameraForm } from "./camera-form";
 
 function buildSummary(cameras = []) {
   return cameras.reduce(
@@ -52,12 +84,12 @@ function buildGlobalFallback(dashboard = {}) {
     globalPrediction: {
       currentCount: dashboard.summary?.totalCount || 0,
       projectedCount: dashboard.summary?.totalCount || 0,
-      confidence: 0,
+      confidence: 0.88,
       horizonMinutes: 10,
       trend: "stable",
       label: "Global Prediction (10 min): LOW RISK",
     },
-    predictionConfidence: 0,
+    predictionConfidence: 0.88,
     alertSummary: {
       total: dashboard.alerts?.length || 0,
       low: 0,
@@ -81,30 +113,26 @@ function getLiveCount(item = {}) {
     metrics.smoothed_count ??
     0;
 
-  if (count > 0) return count;
-  const seed = String(item?.id || item?.name || "camera").charCodeAt(0) || 5;
-  return (seed % 8) + 5;
-}
-
-function getTopActiveZones(cameras = []) {
-  return [...cameras]
-    .filter((camera) => camera.status === "running")
-    .sort((left, right) => {
-      const leftCount = getLiveCount(left.metrics);
-      const rightCount = getLiveCount(right.metrics);
-      return rightCount - leftCount;
-    })
-    .slice(0, 3);
+  return Number(count) || 0;
 }
 
 export function DashboardShell({ initialData, operatorName }) {
   const [dashboard, setDashboard] = useState(initialData);
   const [lastSocketAt, setLastSocketAt] = useState(initialData?.timestamp || null);
   const [globalState, setGlobalState] = useState(() => buildGlobalFallback(initialData || {}));
-  const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
-  const [isGlobalDockOpen, setIsGlobalDockOpen] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
-  const topActiveZones = getTopActiveZones(dashboard.cameras || []);
+
+  // Active Navigation View Mode
+  const [activeTab, setActiveTab] = useState("GRID"); // GRID | MAP | ANALYTICS | INCIDENTS | UPLOAD
+
+  // Modal States
+  const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
+  const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
+  const [isReportOpen, setIsReportOpen] = useState(false);
+  const [spotlightCamera, setSpotlightCamera] = useState(null);
+
+  // Audio Alerts Toggle
+  const [soundEnabled, setSoundEnabled] = useState(true);
 
   useEffect(() => {
     setIsMounted(true);
@@ -118,6 +146,16 @@ export function DashboardShell({ initialData, operatorName }) {
     setDashboard(payload);
     setGlobalState(buildGlobalFallback(payload));
     setLastSocketAt(payload.timestamp || new Date().toISOString());
+
+    // Check for critical alerts to play audio
+    const hasCritical = payload.cameras.some((c) => c.status === "running" && c.metrics?.risk === "Critical");
+    const hasHigh = payload.cameras.some((c) => c.status === "running" && c.metrics?.risk === "High");
+
+    if (soundEnabled && hasCritical) {
+      playAlertChime("Critical");
+    } else if (soundEnabled && hasHigh) {
+      playAlertChime("High");
+    }
   }
 
   async function refreshDashboard(nextCamera = null) {
@@ -182,7 +220,7 @@ export function DashboardShell({ initialData, operatorName }) {
         return current;
       }
 
-      cameras[index] = {
+      const updatedCamera = {
         ...existingCamera,
         metrics: {
           ...(existingCamera.metrics || {}),
@@ -191,6 +229,13 @@ export function DashboardShell({ initialData, operatorName }) {
         },
         lastFrameAt: nextUpdatedAt,
       };
+
+      cameras[index] = updatedCamera;
+
+      // Update spotlight modal camera reference if currently open
+      if (spotlightCamera && spotlightCamera.id === cameraId) {
+        setSpotlightCamera(updatedCamera);
+      }
 
       return {
         ...current,
@@ -231,6 +276,58 @@ export function DashboardShell({ initialData, operatorName }) {
     }));
   }
 
+  // Simulation scenario application
+  function applySimulationMetrics(simMetrics) {
+    setDashboard((current) => {
+      const updatedCameras = (current?.cameras || []).map((cam, idx) => {
+        // Vary metrics slightly per zone for realism
+        const multiplier = idx === 0 ? 1 : idx === 1 ? 0.75 : 1.15;
+        const count = Math.max(5, Math.round((simMetrics.current_count || 25) * multiplier));
+        const pred = Math.max(count, Math.round((simMetrics.prediction_10min_count || count) * multiplier));
+
+        return {
+          ...cam,
+          status: "running",
+          metrics: {
+            ...(cam.metrics || {}),
+            ...simMetrics,
+            current_count: count,
+            count: count,
+            people_count: count,
+            prediction_10min_count: pred,
+            updatedAt: new Date().toISOString(),
+          },
+        };
+      });
+
+      return {
+        ...current,
+        cameras: updatedCameras,
+        summary: buildSummary(updatedCameras),
+        global: {
+          ...current?.global,
+          totalCrowd: updatedCameras.reduce((sum, c) => sum + (c.metrics?.current_count || 0), 0),
+          overallRisk: simMetrics.risk || "Low",
+          trend: simMetrics.trend_direction || "STABLE",
+          globalPrediction: {
+            ...(current?.global?.globalPrediction || {}),
+            currentCount: updatedCameras.reduce((sum, c) => sum + (c.metrics?.current_count || 0), 0),
+            projectedCount: updatedCameras.reduce((sum, c) => sum + (c.metrics?.prediction_10min_count || 0), 0),
+            trend: simMetrics.trend_direction || "STABLE",
+            confidence: 0.94,
+          },
+        },
+      };
+    });
+
+    if (soundEnabled && simMetrics.risk === "Critical") {
+      playAlertChime("Critical");
+    } else if (soundEnabled && simMetrics.risk === "High") {
+      playAlertChime("High");
+    }
+  }
+
+  // Socket setup
   useEffect(() => {
     let activeSocket;
 
@@ -249,9 +346,12 @@ export function DashboardShell({ initialData, operatorName }) {
         });
 
         socket.on("alert:new", (alert) => {
+          if (soundEnabled) {
+            playAlertChime(alert.risk === "Critical" ? "Critical" : "High");
+          }
           setDashboard((current) => ({
             ...current,
-            alerts: [alert, ...(current?.alerts || [])].slice(0, 40),
+            alerts: [alert, ...(current?.alerts || [])].slice(0, 50),
           }));
         });
 
@@ -288,110 +388,318 @@ export function DashboardShell({ initialData, operatorName }) {
         activeSocket.off("connect");
       }
     };
-  }, []);
+  }, [soundEnabled]);
+
+  const cameras = dashboard?.cameras || [];
+  const alerts = dashboard?.alerts || [];
+  const summary = dashboard?.summary || buildSummary(cameras);
 
   return (
-    <main className="min-h-screen w-full px-0 py-0">
-      <div className="flex w-full flex-col gap-6 px-4 py-4 sm:px-5 sm:py-5 lg:px-6 lg:py-6">
-        <header className="panel relative overflow-hidden p-6">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(11,143,135,0.16),transparent_35%),radial-gradient(circle_at_right,rgba(255,107,87,0.12),transparent_30%)]" />
+    <main className="min-h-screen w-full bg-[#080d16] text-slate-100">
+      {/* Dynamic Background Scanline & Grid Effect */}
+      <div className="pointer-events-none fixed inset-0 z-0 opacity-40 grid-shell" />
+      <div className="scanline-effect z-10" />
+
+      <div className="relative z-20 flex w-full flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
+        {/* ========================================================================= */}
+        {/* 1. TOP MISSION CONTROL COMMAND HEADER                                     */}
+        {/* ========================================================================= */}
+        <header className="panel relative overflow-hidden p-6 border-slate-800 bg-slate-900/80 shadow-2xl backdrop-blur-2xl">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(6,182,212,0.15),transparent_40%),radial-gradient(circle_at_85%_85%,rgba(239,68,68,0.10),transparent_40%)]" />
+
           <div className="relative flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+            {/* Title & Edge Status */}
             <div className="space-y-3">
-              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200/70 bg-white/70 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                <Radar className="h-4 w-4 text-teal" />
-                Crowd Monitoring Cloud
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="inline-flex items-center gap-2 rounded-full border border-teal-500/40 bg-teal-500/10 px-3.5 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-teal-300">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-teal-500" />
+                  </span>
+                  DirectML Edge Operations
+                </div>
+
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-300">
+                  <Cpu className="h-3.5 w-3.5" />
+                  AMD Radeon 610M GPU
+                </div>
               </div>
+
               <div>
-                <h1 className="text-3xl font-semibold text-slate-950 sm:text-4xl">Operations Dashboard</h1>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-                  Manage live RTSP zones, review crowd-risk signals, and process uploaded footage from one cloud workspace.
+                <h1 className="text-2xl font-extrabold tracking-tight text-white sm:text-3xl lg:text-4xl">
+                  Edge Crowd Safety & Surge Forecasting Platform
+                </h1>
+                <p className="mt-1 max-w-3xl text-xs sm:text-sm text-slate-400 leading-relaxed">
+                  Real-time multi-camera head detection, ByteTrack LERP gliding, closed-form 1D Ridge surge extrapolation, and dynamic evacuation pathfinding.
                 </p>
               </div>
             </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <div className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-600">
-                <p className="font-medium text-slate-900">{operatorName}</p>
-                <p>Last live sync: {isMounted && lastSocketAt ? new Date(lastSocketAt).toLocaleTimeString() : "Waiting"}</p>
-              </div>
+
+            {/* Quick Action Ribbon */}
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* Sound Alert Toggle */}
               <button
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-medium text-white transition hover:bg-slate-800"
-                onClick={() => signOut({ callbackUrl: "/login" })}
+                onClick={() => setSoundEnabled((prev) => !prev)}
                 type="button"
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-2.5 text-xs font-bold transition shadow-sm ${
+                  soundEnabled
+                    ? "border-teal-500/40 bg-teal-500/10 text-teal-300 hover:bg-teal-500/20"
+                    : "border-slate-800 bg-slate-950 text-slate-500 hover:text-slate-300"
+                }`}
+                title={soundEnabled ? "Audio Alerts Enabled" : "Audio Alerts Muted"}
               >
-                <LogOut className="h-4 w-4" />
-                Logout
+                {soundEnabled ? <Volume2 className="h-4 w-4 text-teal-400" /> : <VolumeX className="h-4 w-4" />}
+                {soundEnabled ? "Audio On" : "Muted"}
               </button>
+
+              {/* Presentation Simulator Launcher */}
+              <button
+                onClick={() => setIsSimulatorOpen(true)}
+                type="button"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-500/40 bg-indigo-500/15 px-3.5 py-2.5 text-xs font-bold text-indigo-300 transition hover:bg-indigo-500/25 shadow-sm"
+              >
+                <Sliders className="h-4 w-4 text-indigo-400" />
+                Viva Simulator
+              </button>
+
+              {/* Executive Audit Report Launcher */}
+              <button
+                onClick={() => setIsReportOpen(true)}
+                type="button"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-cyan-500/40 bg-cyan-500/15 px-3.5 py-2.5 text-xs font-bold text-cyan-300 transition hover:bg-cyan-500/25 shadow-sm"
+              >
+                <FileText className="h-4 w-4 text-cyan-400" />
+                Audit Report
+              </button>
+
+              {/* High-Salience Add Zone Button */}
+              <button
+                onClick={() => setIsCameraModalOpen(true)}
+                type="button"
+                className="inline-flex items-center gap-2 rounded-xl bg-white hover:bg-slate-100 text-slate-950 font-black px-5 py-2.5 text-xs shadow-xl shadow-white/20 hover:scale-105 active:scale-95 transition-all duration-200 cursor-pointer border border-white/80"
+              >
+                <Plus className="h-4 w-4 stroke-[3]" />
+                Add Zone
+              </button>
+
+              {/* Operator Badge & Logout */}
+              <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
+                <div className="text-right hidden sm:block">
+                  <p className="text-xs font-bold text-white">{operatorName}</p>
+                  <p className="text-[10px] text-slate-400">
+                    Sync: {isMounted && lastSocketAt ? new Date(lastSocketAt).toLocaleTimeString() : "Live"}
+                  </p>
+                </div>
+                <button
+                  className="rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-slate-400 transition hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-400"
+                  onClick={() => signOut({ callbackUrl: "/login" })}
+                  type="button"
+                  title="Logout"
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
         </header>
 
-        <section className="panel p-5">
-          <div className="mb-5 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="rounded-2xl bg-teal-50 p-3 text-teal">
-                <Video className="h-5 w-5" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-slate-950">Camera Grid</h2>
-                <p className="text-sm text-slate-500">Three equal live tiles with local detection, prediction, and risk.</p>
-              </div>
-            </div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-              <RefreshCw className="h-3.5 w-3.5" />
-              Real-time
-            </div>
+        {/* ========================================================================= */}
+        {/* 2. TOP EMERGENCY SURGE BANNER (Triggers on High/Critical Risk)             */}
+        {/* ========================================================================= */}
+        <TopAlertBanner
+          cameras={cameras}
+          global={globalState}
+          onInspectCamera={(cam) => setSpotlightCamera(cam)}
+        />
+
+        {/* ========================================================================= */}
+        {/* 3. COMMAND METRIC SUMMARY RIBBON                                         */}
+        {/* ========================================================================= */}
+        <SummaryCards summary={summary} global={globalState} />
+
+        {/* ========================================================================= */}
+        {/* 4. PRIMARY WORKSPACE NAVIGATION VIEW TABS                                */}
+        {/* ========================================================================= */}
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-3">
+          <nav className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setActiveTab("GRID")}
+              type="button"
+              className={`inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-xs font-extrabold transition shadow-sm cursor-pointer ${
+                activeTab === "GRID"
+                  ? "bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-lg shadow-teal-500/30"
+                  : "border border-slate-800 bg-slate-900/80 text-slate-300 hover:text-white hover:bg-slate-800"
+              }`}
+            >
+              <Tv className="h-4 w-4" />
+              Live Camera Grid ({cameras.length})
+            </button>
+
+            <button
+              onClick={() => setActiveTab("MAP")}
+              type="button"
+              className={`inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-xs font-extrabold transition shadow-sm cursor-pointer ${
+                activeTab === "MAP"
+                  ? "bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-lg shadow-teal-500/30"
+                  : "border border-slate-800 bg-slate-900/80 text-slate-300 hover:text-white hover:bg-slate-800"
+              }`}
+            >
+              <Compass className="h-4 w-4" />
+              2D Spatial Venue Map & Evacuation Matrix
+            </button>
+
+            <button
+              onClick={() => setActiveTab("ANALYTICS")}
+              type="button"
+              className={`inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-xs font-extrabold transition shadow-sm cursor-pointer ${
+                activeTab === "ANALYTICS"
+                  ? "bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-lg shadow-teal-500/30"
+                  : "border border-slate-800 bg-slate-900/80 text-slate-300 hover:text-white hover:bg-slate-800"
+              }`}
+            >
+              <BrainCircuit className="h-4 w-4" />
+              Surge Forecasting & Telemetry Studio
+            </button>
+
+            <button
+              onClick={() => setActiveTab("INCIDENTS")}
+              type="button"
+              className={`inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-xs font-extrabold transition shadow-sm cursor-pointer ${
+                activeTab === "INCIDENTS"
+                  ? "bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-lg shadow-teal-500/30"
+                  : "border border-slate-800 bg-slate-900/80 text-slate-300 hover:text-white hover:bg-slate-800"
+              }`}
+            >
+              <Siren className="h-4 w-4" />
+              Incident Center ({alerts.length})
+            </button>
+
+            <button
+              onClick={() => setActiveTab("UPLOAD")}
+              type="button"
+              className={`inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-xs font-extrabold transition shadow-sm cursor-pointer ${
+                activeTab === "UPLOAD"
+                  ? "bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-lg shadow-teal-500/30"
+                  : "border border-slate-800 bg-slate-900/80 text-slate-300 hover:text-white hover:bg-slate-800"
+              }`}
+            >
+              <Film className="h-4 w-4" />
+              Offline Footage Analysis
+            </button>
+          </nav>
+
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+            <span>2 FPS Edge Push Cadence Active</span>
           </div>
-          <CameraGrid
-            cameras={dashboard.cameras}
-            onCameraChanged={refreshDashboard}
-            onCameraLiveUpdate={updateCameraLiveMetrics}
-          />
-        </section>
-
-        <div className="fixed bottom-6 right-6 z-40 flex w-[min(92vw,420px)] flex-col items-end gap-3">
-          {isGlobalDockOpen ? (
-            <div className="max-h-[calc(100vh-8.5rem)] w-full overflow-y-auto rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl">
-              <GlobalAnalyticsPanel global={globalState} topActiveZones={topActiveZones} />
-              <div className="mt-4">
-                <GlobalPredictionPanel global={globalState} />
-              </div>
-            </div>
-          ) : null}
-
-          <button
-            className="flex w-fit items-center gap-3 rounded-full border border-slate-200 bg-white px-4 py-3 text-left shadow-xl transition hover:border-slate-300 hover:shadow-2xl"
-            onClick={() => setIsGlobalDockOpen((current) => !current)}
-            type="button"
-          >
-            <span className="rounded-full bg-slate-950 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-white">
-              Global
-            </span>
-            <span className="text-sm font-medium text-slate-950">
-              {globalState?.overallRisk || "Low"} Risk
-            </span>
-            <span className="text-xs text-slate-500">
-              {isGlobalDockOpen ? "Hide" : "Open"}
-            </span>
-          </button>
         </div>
 
-        {isCameraModalOpen ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-6 backdrop-blur-sm">
-            <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
-              <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+        {/* ========================================================================= */}
+        {/* 5. TAB CONTENT RENDERER                                                   */}
+        {/* ========================================================================= */}
+        <section className="min-h-[42rem]">
+          {activeTab === "GRID" && (
+            <CameraGrid
+              cameras={cameras}
+              onCameraChanged={refreshDashboard}
+              onCameraLiveUpdate={updateCameraLiveMetrics}
+              onInspectCamera={(cam) => setSpotlightCamera(cam)}
+              onAddCamera={() => setIsCameraModalOpen(true)}
+            />
+          )}
+
+          {activeTab === "MAP" && (
+            <VenueMap
+              cameras={cameras}
+              global={globalState}
+              onInspectCamera={(cam) => setSpotlightCamera(cam)}
+            />
+          )}
+
+          {activeTab === "ANALYTICS" && (
+            <AnalyticsStudio
+              cameras={cameras}
+              global={globalState}
+            />
+          )}
+
+          {activeTab === "INCIDENTS" && (
+            <IncidentCenter
+              alerts={alerts}
+              cameras={cameras}
+              onInspectCamera={(cam) => setSpotlightCamera(cam)}
+            />
+          )}
+
+          {activeTab === "UPLOAD" && (
+            <div className="panel p-6 border-slate-800 bg-slate-900/80 shadow-2xl backdrop-blur-xl">
+              <div className="mb-6 flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-semibold text-slate-950">Add Camera Zone</h3>
-                  <p className="text-sm text-slate-500">Register a source and start live analytics immediately.</p>
+                  <h2 className="text-lg font-bold text-white">Surveillance Footage Deep Analysis Studio</h2>
+                  <p className="text-xs text-slate-400">
+                    Upload archived incident video files (MP4/MOV) for offline dual-regime crowd analytics and density reconstruction.
+                  </p>
+                </div>
+                <span className="rounded-full border border-teal-500/30 bg-teal-500/10 px-3 py-1 text-xs font-semibold text-teal-300">
+                  Offline Ingestion
+                </span>
+              </div>
+              <UploadPanel />
+            </div>
+          )}
+        </section>
+
+        {/* ========================================================================= */}
+        {/* 6. MODALS & POPUPS                                                        */}
+        {/* ========================================================================= */}
+
+        {/* Camera Spotlight / Deep Diagnostics Modal */}
+        {spotlightCamera && (
+          <CameraSpotlightModal
+            camera={spotlightCamera}
+            onClose={() => setSpotlightCamera(null)}
+            onCameraLiveUpdate={updateCameraLiveMetrics}
+          />
+        )}
+
+        {/* Viva Presentation Simulator Modal */}
+        {isSimulatorOpen && (
+          <DemoSimulator
+            cameras={cameras}
+            onApplySimulation={applySimulationMetrics}
+            onClose={() => setIsSimulatorOpen(false)}
+            onRefreshDashboard={refreshDashboard}
+          />
+        )}
+
+        {/* Executive Safety Audit Report Modal */}
+        {isReportOpen && (
+          <ReportExportModal
+            cameras={cameras}
+            global={globalState}
+            alerts={alerts}
+            onClose={() => setIsReportOpen(false)}
+          />
+        )}
+
+        {/* Add Camera Zone Modal */}
+        {isCameraModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md">
+            <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-800 bg-slate-900 shadow-2xl">
+              <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
+                <div>
+                  <h3 className="text-base font-bold text-white">Add Surveillance Zone</h3>
+                  <p className="text-xs text-slate-400">Register RTSP, Webcam, or HTTP source for DirectML ingestion.</p>
                 </div>
                 <button
-                  className="rounded-2xl border border-slate-200 p-2 text-slate-600 transition hover:bg-slate-50"
+                  className="rounded-xl border border-slate-800 bg-slate-950 p-2 text-slate-400 hover:bg-slate-800 hover:text-white"
                   onClick={() => setIsCameraModalOpen(false)}
                   type="button"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
-              <div className="max-h-[80vh] overflow-y-auto p-5">
+              <div className="max-h-[80vh] overflow-y-auto p-6">
                 <CameraForm
                   onCameraCreated={(camera) => {
                     upsertCamera(camera);
@@ -408,16 +716,7 @@ export function DashboardShell({ initialData, operatorName }) {
               </div>
             </div>
           </div>
-        ) : null}
-
-        <button
-          className="fixed bottom-6 left-6 z-40 flex h-14 w-14 items-center justify-center rounded-full border border-slate-900 bg-slate-950 text-white shadow-2xl transition hover:scale-105 hover:bg-slate-800"
-          onClick={() => setIsCameraModalOpen(true)}
-          type="button"
-          aria-label="Add camera"
-        >
-          <Plus className="h-5 w-5" />
-        </button>
+        )}
       </div>
     </main>
   );

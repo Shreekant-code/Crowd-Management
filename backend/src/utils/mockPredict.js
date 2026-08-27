@@ -25,46 +25,39 @@ function deriveRisk(count) {
   return "Low";
 }
 
-function getRandomCount() {
-  return Math.floor(Math.random() * 8) + 5; // 5 to 12
-}
-
 function buildMockPrediction(overrides = {}) {
-  const initialCount = getRandomCount();
-  const left = Math.floor(initialCount / 3);
-  const right = Math.floor(initialCount / 3);
-  const center = initialCount - left - right;
-
   return {
-    count: initialCount,
-    people_count: initialCount,
-    current_count: initialCount,
-    total_count: initialCount + Math.floor(Math.random() * 10) + 5,
-    density_count: initialCount,
-    base_count: initialCount,
-    predicted_crowd: initialCount + Math.floor(Math.random() * 4),
-    prediction_10min_count: initialCount + Math.floor(Math.random() * 4) + 1,
-    smoothed_count: initialCount,
-    final_count: initialCount,
-    active_track_ids: Array.from({ length: initialCount }, (_, i) => i + 1),
-    risk: deriveRisk(initialCount),
+    count: 0,
+    people_count: 0,
+    current_count: 0,
+    total_count: 0,
+    density_count: 0,
+    base_count: 0,
+    predicted_crowd: 0,
+    prediction_10min_count: 0,
+    prediction_10min_risk: "LOW",
+    prediction_10min_label: "Prediction (10 min): LOW RISK",
+    smoothed_count: 0,
+    final_count: 0,
+    active_track_ids: [],
+    risk: "Low",
     detections: [],
     heatmap_points: [],
     alerts: [],
-    zone_counts: { left, center, right },
+    zone_counts: { left: 0, center: 0, right: 0 },
     line_crossing: {
-      entry: Math.floor(Math.random() * 3),
-      exit: Math.floor(Math.random() * 2),
+      entry: 0,
+      exit: 0,
     },
     crowd_features: {
-      density_score: Number((initialCount / 20).toFixed(2)),
-      movement_score: 0.15,
-      congestion_score: Number((initialCount / 25).toFixed(2)),
-      hotspot_ratio: 0.35,
+      density_score: 0.0,
+      movement_score: 0.0,
+      congestion_score: 0.0,
+      hotspot_ratio: 0.0,
     },
-    risk_score: Number((initialCount / 25).toFixed(2)),
-    processing_status: "mock_fallback",
-    source: "mockPredict",
+    risk_score: 0.0,
+    processing_status: "warming_up",
+    source: "python-service",
     ...overrides,
   };
 }
@@ -110,6 +103,11 @@ function normalizePrediction(payload, fallback = buildMockPrediction()) {
     heatmap_points: Array.isArray(payload?.heatmap_points)
       ? payload.heatmap_points
       : fallback.heatmap_points,
+    sparse_count: payload?.sparse_count ?? (fallback.sparse_count ?? currentCount),
+    dense_count: payload?.dense_count ?? (fallback.dense_count ?? 0),
+    dominant_regime: payload?.dominant_regime || fallback.dominant_regime || "SPARSE",
+    dense_clusters: Array.isArray(payload?.dense_clusters) ? payload.dense_clusters : [],
+    regime_breakdown: payload?.regime_breakdown || null,
     alerts: Array.isArray(payload?.alerts) ? payload.alerts : fallback.alerts,
     zone_counts:
       payload?.zone_counts && typeof payload.zone_counts === "object"

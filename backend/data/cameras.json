@@ -1,32 +1,24 @@
 [
   {
-    "id": "11ac46f4-e2a1-494e-8ea4-c689463c09c4",
+    "id": "15af0b6a-c5d7-4b3d-825b-f4591776400b",
     "userId": "e57605de-ba09-43a5-90c1-ee2d135be57c",
-    "name": "b",
-    "zoneName": "b",
-    "location": "b",
-    "streamUrl": "https://www.youtube.com/live/fUsJZTHeZn4?si=StJNWgZ6ZWTGQIUQ",
+    "name": "CAM 1",
+    "zoneName": "F1",
+    "location": "xyz",
+    "streamUrl": "https://www.youtube.com/live/IApccLPe7ms?si=scmeTcUgAMtJ4huz",
     "sourceType": "public",
-    "status": "running",
-    "createdAt": "2026-08-23T15:32:01.330Z",
+    "status": "stopped",
+    "createdAt": "2026-08-27T02:17:47.499Z",
     "metrics": {
-      "count": 7,
-      "current_count": 7,
-      "total_count": 26,
-      "people_count": 7,
-      "prediction_10min_count": 11,
-      "prediction_10min_risk": "CRITICAL",
-      "prediction_10min_label": "Prediction (10 min): CRITICAL RISK",
+      "count": 0,
+      "current_count": 0,
+      "total_count": 0,
+      "people_count": 0,
+      "prediction_10min_count": 0,
+      "prediction_10min_risk": "LOW",
+      "prediction_10min_label": "Prediction (10 min): LOW RISK",
       "prediction_horizon_minutes": 10,
-      "active_track_ids": [
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7
-      ],
+      "active_track_ids": [],
       "detections": [],
       "heatmap_points": [],
       "line_crossing": {
@@ -34,372 +26,18 @@
         "exit": 1
       },
       "zone_counts": {
-        "left": 2,
-        "center": 3,
-        "right": 2
+        "left": 0,
+        "center": 0,
+        "right": 0
       },
       "crowd_features": {
-        "density_score": 0.35,
-        "movement_score": 0.15,
-        "congestion_score": 0.28,
-        "hotspot_ratio": 0.35
+        "density_score": 0,
+        "movement_score": 0,
+        "congestion_score": 0,
+        "hotspot_ratio": 0
       },
       "prediction": 0,
       "confidence": 0.85,
-      "latency_ms": 45,
-      "inference_ms": 114.02,
-      "camera_health": "good",
-      "fps": 0,
-      "risk": "Low",
-      "risk_score": 0.28,
-      "processing_status": "mock_fallback",
-      "updatedAt": "2026-08-23T17:45:50.539Z",
-      "stream_resolution_status": "youtube_resolved",
-      "stream_resolution_error": null,
-      "webrtc_url": "http://localhost:8889/cam_11ac46f4-e2a1-494e-8ea4-c689463c09c4/whep",
-      "alerts": [],
-      "density_count": 7,
-      "base_count": 7,
-      "predicted_crowd": 7,
-      "smoothed_count": 7,
-      "final_count": 7,
-      "source": "mockPredict",
-      "density_mode": true,
-      "overlap_ratio": 1,
-      "trend_direction": "SURGING",
-      "growth_rate_per_min": 13.76,
-      "forecaster_latency_ms": 0.077,
-      "camera_id": "11ac46f4-e2a1-494e-8ea4-c689463c09c4",
-      "userId": "e57605de-ba09-43a5-90c1-ee2d135be57c",
-      "zoneName": "b",
-      "fallback_reason": "fetch failed"
-    },
-    "webrtcUrl": "http://localhost:8889/cam_11ac46f4-e2a1-494e-8ea4-c689463c09c4/whep",
-    "lastStartedAt": "2026-08-23T17:38:11.541Z",
-    "lastFrameAt": "2026-08-23T17:45:50.539Z"
-  },
-  {
-    "id": "13245fee-609c-4ac6-81d2-c4e17880c8f6",
-    "userId": "85920eb5-ff22-4309-a530-e3c681369866",
-    "name": "North b",
-    "zoneName": "Zone b",
-    "location": "new 3",
-    "streamUrl": "https://www.youtube.com/live/3nyPER2kzqk?si=KCyw0n_h1TIL91gL",
-    "sourceType": "public",
-    "status": "stopped",
-    "createdAt": "2026-08-02T10:23:45.833Z",
-    "metrics": {
-      "count": 0,
-      "current_count": 0,
-      "total_count": 0,
-      "people_count": 0,
-      "prediction_10min_count": 0,
-      "prediction_10min_risk": "LOW",
-      "prediction_10min_label": "Prediction (10 min): LOW RISK",
-      "prediction_horizon_minutes": 10,
-      "active_track_ids": [],
-      "detections": [],
-      "heatmap_points": [],
-      "line_crossing": {
-        "entry": 0,
-        "exit": 0
-      },
-      "zone_counts": {
-        "left": 0,
-        "center": 0,
-        "right": 0
-      },
-      "crowd_features": {
-        "density_score": 0,
-        "movement_score": 0,
-        "congestion_score": 0,
-        "hotspot_ratio": 0
-      },
-      "prediction": 0,
-      "confidence": 0,
-      "latency_ms": 0,
-      "inference_ms": 0,
-      "camera_health": "good",
-      "fps": 0,
-      "risk": "Low",
-      "risk_score": 0,
-      "processing_status": "mock_fallback",
-      "updatedAt": "2026-08-02T11:00:07.478Z",
-      "stream_resolution_status": "connecting",
-      "stream_resolution_error": null,
-      "alerts": [],
-      "density_count": 0,
-      "base_count": 0,
-      "predicted_crowd": 0,
-      "smoothed_count": 0,
-      "final_count": 0,
-      "source": "mockPredict",
-      "fallback_reason": "fetch failed"
-    },
-    "lastStartedAt": "2026-08-02T10:58:11.646Z",
-    "lastFrameAt": "2026-08-02T11:00:07.478Z"
-  },
-  {
-    "id": "d497411d-17f3-4b81-bbe5-16c5b14e09fd",
-    "userId": "85920eb5-ff22-4309-a530-e3c681369866",
-    "name": "South",
-    "zoneName": "Zone b",
-    "location": "b",
-    "streamUrl": "http://192.168.0.101:8080/video",
-    "sourceType": "http",
-    "status": "stopped",
-    "createdAt": "2026-08-02T09:48:26.676Z",
-    "metrics": {
-      "count": 0,
-      "current_count": 0,
-      "total_count": 0,
-      "people_count": 0,
-      "prediction_10min_count": 0,
-      "prediction_10min_risk": "LOW",
-      "prediction_10min_label": "Prediction (10 min): LOW RISK",
-      "prediction_horizon_minutes": 10,
-      "active_track_ids": [],
-      "detections": [],
-      "heatmap_points": [],
-      "line_crossing": {
-        "entry": 0,
-        "exit": 0
-      },
-      "zone_counts": {
-        "left": 0,
-        "center": 0,
-        "right": 0
-      },
-      "crowd_features": {
-        "density_score": 0,
-        "movement_score": 0,
-        "congestion_score": 0,
-        "hotspot_ratio": 0
-      },
-      "prediction": 0,
-      "confidence": 0,
-      "latency_ms": 0,
-      "inference_ms": 0,
-      "camera_health": "good",
-      "fps": 3.53,
-      "risk": "Low",
-      "risk_score": 0,
-      "processing_status": "mock_fallback",
-      "updatedAt": "2026-08-02T10:55:37.203Z",
-      "stream_resolution_status": "connecting",
-      "stream_resolution_error": null,
-      "alerts": [],
-      "density_count": 0,
-      "base_count": 0,
-      "predicted_crowd": 0,
-      "smoothed_count": 0,
-      "final_count": 0,
-      "source": "mockPredict",
-      "frame_id": 315,
-      "density_map": [],
-      "density_context": {
-        "model": "CSRNet",
-        "enabled": false,
-        "used_density": false,
-        "overlay_enabled": false,
-        "track_count": 0,
-        "fallback_mode": "YOLO",
-        "validation_error": "warming_up",
-        "processing_ms": 0,
-        "sequence_length": 0,
-        "suppressed_without_yolo": false
-      },
-      "temporal_context": {
-        "model": "ConvLSTM",
-        "enabled": false,
-        "sample_count": 8,
-        "sequence_length": 8,
-        "model_error": "PytorchStreamReader failed locating file constants.pkl: file not found",
-        "scaler_error": "invalid load key, '\\x07'."
-      },
-      "updated_at": "2026-08-02T10:30:54.762513+00:00",
-      "raw_count": 0,
-      "yolo_count": 0,
-      "csrnet_count": null,
-      "predicted_count": 0,
-      "mode": "YOLO",
-      "model_used": "YOLO",
-      "heatmap_active": false,
-      "last_valid_count": 0,
-      "failure_count": 315,
-      "density": 0,
-      "preprocessing_context": {
-        "enabled": true,
-        "enhancements": [
-          "gamma:1.35",
-          "clahe",
-          "contrast_clahe",
-          "sharpen"
-        ],
-        "quality": {
-          "brightness": 0.0308,
-          "contrast": 0.0069,
-          "blur": 3.11
-        }
-      },
-      "status": "active",
-      "risk_level": "low",
-      "crowd_level": "low",
-      "count_history": [
-        0
-      ],
-      "camera_id": "d497411d-17f3-4b81-bbe5-16c5b14e09fd",
-      "user_id": "85920eb5-ff22-4309-a530-e3c681369866",
-      "zone_name": "Zone b",
-      "fallback_reason": "AI service request timed out after 1500ms"
-    },
-    "lastStartedAt": "2026-08-02T10:51:11.910Z",
-    "lastFrameAt": "2026-08-02T10:55:37.203Z"
-  },
-  {
-    "id": "53dbb611-536f-4f4b-b00f-b13a52d20b1b",
-    "userId": "2c23347e-6e7b-4d95-9d20-54ba9358a7d2",
-    "name": "camera 2",
-    "zoneName": "Zone c",
-    "location": "New 2",
-    "streamUrl": "http://192.168.0.102:8080/video",
-    "sourceType": "http",
-    "status": "stopped",
-    "createdAt": "2026-07-18T06:16:24.121Z",
-    "metrics": {
-      "count": 0,
-      "current_count": 0,
-      "total_count": 0,
-      "people_count": 0,
-      "prediction_10min_count": 0,
-      "prediction_10min_risk": "LOW",
-      "prediction_10min_label": "Prediction (10 min): LOW RISK",
-      "prediction_horizon_minutes": 10,
-      "active_track_ids": [],
-      "detections": [],
-      "heatmap_points": [],
-      "line_crossing": {
-        "entry": 0,
-        "exit": 0
-      },
-      "zone_counts": {
-        "left": 0,
-        "center": 0,
-        "right": 0
-      },
-      "crowd_features": {
-        "density_score": 0,
-        "movement_score": 0,
-        "congestion_score": 0,
-        "hotspot_ratio": 0
-      },
-      "prediction": 0,
-      "confidence": 0,
-      "latency_ms": 0,
-      "inference_ms": 0,
-      "camera_health": "good",
-      "fps": 0.94,
-      "risk": "Low",
-      "risk_score": 0,
-      "processing_status": "live",
-      "updatedAt": "2026-07-18T06:22:16.045569+00:00",
-      "stream_resolution_status": "connecting",
-      "stream_resolution_error": null,
-      "alerts": [],
-      "density_count": 0,
-      "base_count": 0,
-      "predicted_crowd": 0,
-      "smoothed_count": 0,
-      "final_count": 0,
-      "source": "python-service",
-      "frame_id": 92,
-      "density_map": [],
-      "density_context": {
-        "model": "CSRNet",
-        "enabled": false,
-        "used_density": false,
-        "track_count": 0
-      },
-      "temporal_context": {
-        "model": "ConvLSTM",
-        "enabled": false,
-        "sample_count": 0
-      },
-      "updated_at": "2026-07-18T06:22:16.045569+00:00",
-      "raw_count": 0,
-      "yolo_count": 0,
-      "csrnet_count": null,
-      "predicted_count": 0,
-      "mode": "YOLO",
-      "model_used": "YOLO",
-      "heatmap_active": false,
-      "last_valid_count": 0,
-      "failure_count": 92,
-      "density": 0,
-      "preprocessing_context": {
-        "enabled": true,
-        "enhancements": [
-          "gamma:1.15",
-          "clahe"
-        ],
-        "quality": {
-          "brightness": 0.3447,
-          "contrast": 0.2732,
-          "blur": 99.21
-        }
-      },
-      "status": "active",
-      "risk_level": "low",
-      "crowd_level": "low",
-      "count_history": [
-        0
-      ],
-      "camera_id": "53dbb611-536f-4f4b-b00f-b13a52d20b1b",
-      "user_id": "2c23347e-6e7b-4d95-9d20-54ba9358a7d2",
-      "zone_name": "Zone c"
-    },
-    "lastStartedAt": "2026-07-18T06:16:30.490Z",
-    "lastFrameAt": "2026-07-18T06:22:16.045569+00:00"
-  },
-  {
-    "id": "44cd2ced-b305-45d4-9fd4-49a8d38c4bf9",
-    "userId": "2c23347e-6e7b-4d95-9d20-54ba9358a7d2",
-    "name": "Camera 1",
-    "zoneName": "Zone b",
-    "location": "New",
-    "streamUrl": "https://www.youtube.com/live/EO_1LWqsCNE?si=P7Io7uRO4LckYyrP",
-    "sourceType": "public",
-    "status": "stopped",
-    "createdAt": "2026-07-18T04:01:59.767Z",
-    "metrics": {
-      "count": 0,
-      "current_count": 0,
-      "total_count": 0,
-      "people_count": 0,
-      "prediction_10min_count": 0,
-      "prediction_10min_risk": "LOW",
-      "prediction_10min_label": "Prediction (10 min): LOW RISK",
-      "prediction_horizon_minutes": 10,
-      "active_track_ids": [],
-      "detections": [],
-      "heatmap_points": [],
-      "line_crossing": {
-        "entry": 0,
-        "exit": 0
-      },
-      "zone_counts": {
-        "left": 0,
-        "center": 0,
-        "right": 0
-      },
-      "crowd_features": {
-        "density_score": 0,
-        "movement_score": 0,
-        "congestion_score": 0,
-        "hotspot_ratio": 0
-      },
-      "prediction": 0,
-      "confidence": 0,
       "latency_ms": 0,
       "inference_ms": 0,
       "camera_health": "good",
@@ -407,194 +45,397 @@
       "risk": "Low",
       "risk_score": 0,
       "processing_status": "warming_up",
-      "updatedAt": "2026-07-18T06:22:16.119Z",
-      "alerts": [],
-      "density_count": 0,
-      "base_count": 0,
-      "predicted_crowd": 0,
-      "smoothed_count": 0,
-      "final_count": 0,
-      "source": "python-service",
-      "stream_resolution_status": "connecting",
+      "updatedAt": "2026-08-27T02:19:31.769Z",
+      "stream_resolution_status": "youtube_resolved",
       "stream_resolution_error": null,
-      "fallback_reason": "fetch failed"
-    },
-    "lastStartedAt": "2026-07-18T06:10:22.634Z",
-    "lastFrameAt": "2026-07-18T06:22:16.119Z"
-  },
-  {
-    "id": "dec33371-0f8d-4a98-b90f-5dce30a256a1",
-    "userId": "bfa936c0-33a3-4190-bc44-6a5870832b8b",
-    "name": "college",
-    "zoneName": "lib b",
-    "location": "campus",
-    "streamUrl": "http://10.43.248.239:8080/video",
-    "sourceType": "http",
-    "status": "stopped",
-    "createdAt": "2026-04-29T04:50:06.408Z",
-    "metrics": {
-      "count": 0,
-      "current_count": 0,
-      "total_count": 8,
-      "people_count": 0,
-      "active_track_ids": [],
-      "detections": [],
-      "heatmap_points": [],
-      "line_crossing": {
-        "entry": 2,
-        "exit": 2
-      },
-      "zone_counts": {
-        "left": 0,
-        "center": 0,
-        "right": 0
-      },
-      "crowd_features": {
-        "density_score": 0,
-        "movement_score": 0,
-        "congestion_score": 0,
-        "hotspot_ratio": 0
-      },
-      "risk": "Low",
-      "updatedAt": "2026-04-30T01:43:16.401415+00:00",
+      "webrtc_url": "http://localhost:8889/cam_15af0b6a-c5d7-4b3d-825b-f4591776400b/whep",
       "alerts": [],
-      "prediction_10min_count": 0,
-      "prediction_10min_risk": "LOW",
-      "prediction_10min_label": "Prediction (10 min): LOW RISK",
-      "prediction_horizon_minutes": 10,
-      "risk_score": 0,
-      "processing_status": "live",
       "density_count": 0,
       "base_count": 0,
       "predicted_crowd": 0,
       "smoothed_count": 0,
       "final_count": 0,
       "source": "python-service",
-      "frame_id": 235,
-      "density_map": [],
-      "density_context": {
-        "model": "CSRNet",
-        "enabled": false,
-        "used_density": false,
-        "track_count": 0
+      "sparse_count": 15,
+      "dense_count": 0,
+      "dominant_regime": "SPARSE",
+      "dense_clusters": [],
+      "regime_breakdown": {
+        "dominant_regime": "SPARSE",
+        "sparse_count": 15,
+        "dense_count": 0,
+        "sparse_ratio": 1,
+        "dense_ratio": 0,
+        "dense_clusters": [],
+        "grid_density_map": [
+          [
+            0,
+            0,
+            0,
+            0.6666666865348816,
+            0.3333333432674408,
+            0
+          ],
+          [
+            0,
+            1,
+            0.3333333432674408,
+            0,
+            0,
+            0.3333333432674408
+          ],
+          [
+            0.3333333432674408,
+            0,
+            0,
+            0.3333333432674408,
+            0,
+            0
+          ],
+          [
+            0.3333333432674408,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0.6666666865348816,
+            0.3333333432674408,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0.3333333432674408,
+            0,
+            0
+          ]
+        ],
+        "sparse_detections": [
+          {
+            "id": 86,
+            "point": [
+              1335,
+              847
+            ],
+            "bbox": [
+              1230,
+              624,
+              210,
+              447
+            ],
+            "bbox_xyxy": [
+              1230,
+              624,
+              1440,
+              1071
+            ],
+            "confidence": 0.856
+          },
+          {
+            "id": 67,
+            "point": [
+              1122,
+              780
+            ],
+            "bbox": [
+              1044,
+              564,
+              156,
+              432
+            ],
+            "bbox_xyxy": [
+              1044,
+              564,
+              1200,
+              996
+            ],
+            "confidence": 0.824
+          },
+          {
+            "id": 53,
+            "point": [
+              1272,
+              454
+            ],
+            "bbox": [
+              1212,
+              315,
+              120,
+              279
+            ],
+            "bbox_xyxy": [
+              1212,
+              315,
+              1332,
+              594
+            ],
+            "confidence": 0.778
+          },
+          {
+            "id": 74,
+            "point": [
+              982,
+              813
+            ],
+            "bbox": [
+              915,
+              648,
+              135,
+              330
+            ],
+            "bbox_xyxy": [
+              915,
+              648,
+              1050,
+              978
+            ],
+            "confidence": 0.753
+          },
+          {
+            "id": 101,
+            "point": [
+              1074,
+              915
+            ],
+            "bbox": [
+              996,
+              759,
+              156,
+              312
+            ],
+            "bbox_xyxy": [
+              996,
+              759,
+              1152,
+              1071
+            ],
+            "confidence": 0.675
+          },
+          {
+            "id": 10,
+            "point": [
+              741,
+              243
+            ],
+            "bbox": [
+              720,
+              183,
+              42,
+              120
+            ],
+            "bbox_xyxy": [
+              720,
+              183,
+              762,
+              303
+            ],
+            "confidence": 0.672
+          },
+          {
+            "id": 22,
+            "point": [
+              403,
+              321
+            ],
+            "bbox": [
+              375,
+              255,
+              57,
+              132
+            ],
+            "bbox_xyxy": [
+              375,
+              255,
+              432,
+              387
+            ],
+            "confidence": 0.659
+          },
+          {
+            "id": 52,
+            "point": [
+              145,
+              408
+            ],
+            "bbox": [
+              111,
+              324,
+              69,
+              168
+            ],
+            "bbox_xyxy": [
+              111,
+              324,
+              180,
+              492
+            ],
+            "confidence": 0.465
+          },
+          {
+            "id": 24,
+            "point": [
+              1902,
+              319
+            ],
+            "bbox": [
+              1887,
+              204,
+              30,
+              231
+            ],
+            "bbox_xyxy": [
+              1887,
+              204,
+              1917,
+              435
+            ],
+            "confidence": 0.364
+          },
+          {
+            "id": 18,
+            "point": [
+              498,
+              277
+            ],
+            "bbox": [
+              477,
+              213,
+              42,
+              129
+            ],
+            "bbox_xyxy": [
+              477,
+              213,
+              519,
+              342
+            ],
+            "confidence": 0.277
+          },
+          {
+            "id": 1,
+            "point": [
+              1351,
+              157
+            ],
+            "bbox": [
+              1335,
+              126,
+              33,
+              63
+            ],
+            "bbox_xyxy": [
+              1335,
+              126,
+              1368,
+              189
+            ],
+            "confidence": 0.276
+          },
+          {
+            "id": 0,
+            "point": [
+              1042,
+              153
+            ],
+            "bbox": [
+              1029,
+              111,
+              27,
+              84
+            ],
+            "bbox_xyxy": [
+              1029,
+              111,
+              1056,
+              195
+            ],
+            "confidence": 0.264
+          },
+          {
+            "id": 3,
+            "point": [
+              1192,
+              168
+            ],
+            "bbox": [
+              1179,
+              129,
+              27,
+              78
+            ],
+            "bbox_xyxy": [
+              1179,
+              129,
+              1206,
+              207
+            ],
+            "confidence": 0.224
+          },
+          {
+            "id": 62,
+            "point": [
+              25,
+              601
+            ],
+            "bbox": [
+              0,
+              480,
+              51,
+              243
+            ],
+            "bbox_xyxy": [
+              0,
+              480,
+              51,
+              723
+            ],
+            "confidence": 0.218
+          },
+          {
+            "id": 9,
+            "point": [
+              495,
+              252
+            ],
+            "bbox": [
+              477,
+              216,
+              36,
+              72
+            ],
+            "bbox_xyxy": [
+              477,
+              216,
+              513,
+              288
+            ],
+            "confidence": 0.184
+          }
+        ],
+        "dense_detections": [],
+        "avg_inter_head_distance": 262.56,
+        "hotspot_regions": []
       },
-      "temporal_context": {
-        "model": "ConvLSTM",
-        "enabled": false,
-        "sample_count": 0
-      },
-      "updated_at": "2026-04-30T01:43:16.401415+00:00",
-      "raw_count": 1,
-      "yolo_count": 1,
-      "csrnet_count": null,
-      "predicted_count": 0,
-      "mode": "YOLO",
-      "model_used": "YOLO",
-      "heatmap_active": false,
-      "last_valid_count": 0,
-      "failure_count": 235,
-      "fps": 1.39,
-      "density": 1,
-      "status": "active",
-      "risk_level": "low",
-      "crowd_level": "low",
-      "count_history": [
-        0,
-        1
-      ],
-      "camera_id": "dec33371-0f8d-4a98-b90f-5dce30a256a1",
-      "user_id": "bfa936c0-33a3-4190-bc44-6a5870832b8b",
-      "zone_name": "lib b",
-      "fallback_reason": "AI service request timed out after 1500ms"
+      "density_mode": false,
+      "sparse_ratio": 1,
+      "dense_ratio": 0,
+      "overlap_ratio": 0,
+      "trend_direction": "ACCUMULATING",
+      "growth_rate_per_min": 0.67,
+      "forecaster_latency_ms": 0.165,
+      "camera_id": "15af0b6a-c5d7-4b3d-825b-f4591776400b",
+      "userId": "e57605de-ba09-43a5-90c1-ee2d135be57c",
+      "zoneName": "F1"
     },
-    "lastStartedAt": "2026-04-29T06:14:34.183Z",
-    "lastFrameAt": "2026-04-30T01:43:16.401415+00:00"
-  },
-  {
-    "id": "bfaa2b9c-9ef8-46d4-b46f-2cf7f22059cb",
-    "userId": "bfa936c0-33a3-4190-bc44-6a5870832b8b",
-    "name": "Campus ",
-    "zoneName": "Lib a",
-    "location": "Library",
-    "streamUrl": "http://10.43.248.133:8080/video",
-    "sourceType": "http",
-    "status": "stopped",
-    "createdAt": "2026-04-29T04:30:14.403Z",
-    "metrics": {
-      "count": 0,
-      "current_count": 0,
-      "total_count": 13,
-      "people_count": 0,
-      "active_track_ids": [],
-      "detections": [],
-      "heatmap_points": [],
-      "line_crossing": {
-        "entry": 3,
-        "exit": 3
-      },
-      "zone_counts": {
-        "left": 0,
-        "center": 0,
-        "right": 0
-      },
-      "crowd_features": {
-        "density_score": 0,
-        "movement_score": 0,
-        "congestion_score": 0,
-        "hotspot_ratio": 0
-      },
-      "risk": "Low",
-      "updatedAt": "2026-04-30T01:43:16.461852+00:00",
-      "alerts": [],
-      "prediction_10min_count": 0,
-      "prediction_10min_risk": "LOW",
-      "prediction_10min_label": "Prediction (10 min): LOW RISK",
-      "prediction_horizon_minutes": 10,
-      "risk_score": 0,
-      "processing_status": "live",
-      "density_count": 0,
-      "base_count": 0,
-      "predicted_crowd": 0,
-      "smoothed_count": 0,
-      "final_count": 0,
-      "source": "python-service",
-      "frame_id": 235,
-      "density_map": [],
-      "density_context": {
-        "model": "CSRNet",
-        "enabled": false,
-        "used_density": false,
-        "track_count": 0
-      },
-      "temporal_context": {
-        "model": "ConvLSTM",
-        "enabled": false,
-        "sample_count": 0
-      },
-      "updated_at": "2026-04-30T01:43:16.461852+00:00",
-      "raw_count": 0,
-      "yolo_count": 0,
-      "csrnet_count": null,
-      "predicted_count": 0,
-      "mode": "YOLO",
-      "model_used": "YOLO",
-      "heatmap_active": false,
-      "last_valid_count": 0,
-      "failure_count": 235,
-      "fps": 1.54,
-      "density": 0,
-      "status": "active",
-      "risk_level": "low",
-      "crowd_level": "low",
-      "count_history": [
-        0
-      ],
-      "camera_id": "bfaa2b9c-9ef8-46d4-b46f-2cf7f22059cb",
-      "user_id": "bfa936c0-33a3-4190-bc44-6a5870832b8b",
-      "zone_name": "Lib a",
-      "fallback_reason": "AI service request timed out after 1500ms"
-    },
-    "lastStartedAt": "2026-04-29T06:14:23.032Z",
-    "lastFrameAt": "2026-04-30T01:43:16.461852+00:00"
+    "webrtcUrl": "http://localhost:8889/cam_15af0b6a-c5d7-4b3d-825b-f4591776400b/whep",
+    "lastStartedAt": "2026-08-27T02:17:49.685Z",
+    "lastFrameAt": "2026-08-27T02:19:31.769Z"
   }
 ]

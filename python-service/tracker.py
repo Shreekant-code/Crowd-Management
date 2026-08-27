@@ -128,12 +128,12 @@ class PersonTracker:
                     "bbox": [x1, y1, max(x2 - x1, 0), max(y2 - y1, 0)],
                     "bbox_xyxy": [x1, y1, x2, y2],
                     "center": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
+                    "point": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
+                    "confidence": 0.85,
                 }
             )
 
         items.sort(key=lambda item: item["id"])
-        if DEBUG_EVERY_N_FRAMES > 0:
-            print(f"[tracker] tracked_ids={[item['id'] for item in items]}")
         return items
 
     def _update_fallback(self, detections: List[Dict[str, Any]]) -> List[Dict[str, int]]:
@@ -203,10 +203,10 @@ class PersonTracker:
                     "bbox": [x1, y1, max(x2 - x1, 0), max(y2 - y1, 0)],
                     "bbox_xyxy": [x1, y1, x2, y2],
                     "center": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
+                    "point": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
+                    "confidence": float(track.get("confidence", 0.85)),
                 }
             )
 
         items.sort(key=lambda item: item["id"])
-        if DEBUG_EVERY_N_FRAMES > 0:
-            print(f"[tracker] tracked_ids={[item['id'] for item in items]}")
         return items

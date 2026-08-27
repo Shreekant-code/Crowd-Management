@@ -5,6 +5,7 @@ import dashboardRoutes from "./routes/dashboardRoutes.js";
 import globalRoutes from "./routes/globalRoutes.js";
 import streamRoutes from "./routes/streamRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
+import evacuationRoutes from "./routes/evacuationRoutes.js";
 import { receiveUploadResult, receiveTelemetryBatch } from "./controllers/aiCallbackController.js";
 import { frontendUrl } from "./config/env.js";
 import { requireAiCallbackAuth } from "./middleware/requireAiCallbackAuth.js";
@@ -45,6 +46,7 @@ app.use("/api/dashboard", requirePlatformAuth, dashboardRoutes);
 app.use("/api/global", requirePlatformAuth, globalRoutes);
 app.use("/api/stream", requirePlatformAuth, streamRoutes);
 app.use("/api/uploads", requirePlatformAuth, uploadRoutes);
+app.use("/api/evacuation", requirePlatformAuth, evacuationRoutes);
 
 app.use((error, req, res, _next) => {
   const statusCode = error.statusCode || error.status || 500;

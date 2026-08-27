@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Film, Loader2 } from "lucide-react";
+import { CheckCircle2, Cpu, Film, Loader2, Sparkles, UploadCloud } from "lucide-react";
 import { uploadVideo } from "@/lib/api";
 import { riskClass } from "@/lib/risk";
 
@@ -34,57 +34,87 @@ export function UploadPanel() {
 
   return (
     <form className="space-y-4" onSubmit={handleSubmit}>
-      <label className="block rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-center">
-        <Film className="mx-auto h-6 w-6 text-slate-500" />
-        <p className="mt-3 text-sm font-medium text-slate-700">Upload incident video</p>
-        <p className="mt-1 text-xs text-slate-500">Supported: MP4, MOV, MKV, WEBM</p>
+      <label className="block cursor-pointer rounded-2xl border-2 border-dashed border-slate-800 bg-slate-950/60 p-8 text-center transition hover:border-teal-500/50 hover:bg-teal-500/5">
+        <UploadCloud className="mx-auto h-10 w-10 text-teal-400/80" />
+        <p className="mt-3 text-sm font-bold text-white">
+          {file ? file.name : "Select or Drop Surveillance Footage"}
+        </p>
+        <p className="mt-1 text-xs text-slate-400">
+          Supported Formats: MP4, MOV, MKV, WEBM (DirectML Batch Processing)
+        </p>
         <input
           accept="video/mp4,video/quicktime,video/x-matroska,video/webm"
-          className="mt-4 block w-full text-sm text-slate-500"
+          className="hidden"
           onChange={(event) => setFile(event.target.files?.[0] || null)}
           type="file"
         />
       </label>
 
-      {state.error ? (
-        <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{state.error}</p>
-      ) : null}
+      {file && (
+        <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900 px-4 py-2 text-xs text-slate-300">
+          <span>Selected File: <strong className="text-white">{file.name}</strong> ({(file.size / (1024 * 1024)).toFixed(2)} MB)</span>
+          <button
+            type="button"
+            onClick={() => setFile(null)}
+            className="text-xs font-bold text-red-400 hover:text-red-300"
+          >
+            Remove
+          </button>
+        </div>
+      )}
 
-      {state.result ? (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <div className="flex items-center justify-between gap-3">
+      {state.error && (
+        <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs font-semibold text-red-300">
+          {state.error}
+        </p>
+      )}
+
+      {state.result && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-950 p-5 space-y-4 shadow-xl">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-3">
             <div>
-              <p className="text-sm font-semibold text-slate-900">{state.result.file.originalName}</p>
-              <p className="text-xs text-slate-500">
-                Processed at {new Date(state.result.analysis.processedAt).toLocaleString()}
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-teal-400" />
+                <p className="text-sm font-bold text-white">{state.result.file?.originalName || "Uploaded Media"}</p>
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Processed via DirectML AI at {new Date(state.result.analysis?.processedAt || Date.now()).toLocaleTimeString()}
               </p>
             </div>
-            <span className={`${riskClass(state.result.analysis.risk)} rounded-full`}>
-              {state.result.analysis.risk}
+            <span className={riskClass(state.result.analysis?.risk || "Low")}>
+              {state.result.analysis?.risk || "Low"}
             </span>
           </div>
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="rounded-2xl bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Detected Crowd</p>
-              <p className="mt-2 text-2xl font-semibold text-slate-950">{state.result.analysis.count}</p>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Heads Counted</span>
+              <p className="mt-1 text-2xl font-bold text-white">{state.result.analysis?.count ?? 0}</p>
             </div>
-            <div className="rounded-2xl bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Processed File</p>
-              <p className="mt-2 text-sm font-medium text-slate-900">{state.result.file.storedName}</p>
+            <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Risk Assessment</span>
+              <p className="mt-1 text-xl font-bold text-teal-400">{state.result.analysis?.risk ?? "Low"}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Stored Target</span>
+              <p className="mt-1 text-xs font-bold text-slate-300 truncate">{state.result.file?.storedName || "archived.mp4"}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Acceleration</span>
+              <p className="mt-1 text-xs font-bold text-cyan-400">AMD DirectML FP16</p>
             </div>
           </div>
         </div>
-      ) : null}
+      )}
 
       <button
-        className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-signal px-4 py-3 text-sm font-medium text-white transition hover:bg-[#e45743] disabled:opacity-60"
+        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-white font-extrabold px-5 py-3 text-xs shadow-lg shadow-teal-500/25 transition hover:scale-[1.01] active:scale-95 disabled:opacity-50 cursor-pointer"
         disabled={!file || state.loading}
         type="submit"
       >
         {state.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />}
-        {state.loading ? "Processing..." : "Process Video"}
+        {state.loading ? "Processing Footage with DirectML Engine..." : "Analyze Footage Offline"}
       </button>
     </form>
   );
 }
-

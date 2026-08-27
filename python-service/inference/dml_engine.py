@@ -110,6 +110,15 @@ class DirectMLInferenceEngine:
         """
         Executes thread-safe batched inference on AMD Radeon / CPU fallback.
         batch_tensor: Shape (Batch, 3, 640, 640)
+        Returns the primary output tensor.
+        """
+        outputs = self.infer_batch_multi_output(batch_tensor)
+        return outputs[0]
+
+    def infer_batch_multi_output(self, batch_tensor: np.ndarray) -> List[np.ndarray]:
+        """
+        Executes thread-safe batched inference returning all ONNX output tensors.
+        batch_tensor: Shape (Batch, 3, 640, 640)
         """
         if self.session is None:
             self._initialize_session()
@@ -120,17 +129,14 @@ class DirectMLInferenceEngine:
 
         with _DML_GLOBAL_LOCK:
             try:
-                outputs = self.session.run(self.output_names, {self.input_name: batch_tensor})
-                return outputs[0]
+                return self.session.run(self.output_names, {self.input_name: batch_tensor})
             except Exception as err:
                 err_str = str(err)
                 print(f"[dml-engine] Warning: Inference exception on {self.active_provider}: {err_str}")
-                if "887A0005" in err_str or "suspended" in err_str.lower() or "device_removed" in err_str.lower():
-                    print("[dml-engine] DirectML device suspended. Falling back to CPUExecutionProvider...")
-                    self._fallback_to_cpu()
-                    target_dtype = np.float16 if self.is_fp16 else np.float32
-                    if batch_tensor.dtype != target_dtype:
-                        batch_tensor = batch_tensor.astype(target_dtype)
-                    outputs = self.session.run(self.output_names, {self.input_name: batch_tensor})
-                    return outputs[0]
-                raise err
+                print("[dml-engine] Transitioning session to CPUExecutionProvider...")
+                self._fallback_to_cpu()
+                target_dtype = np.float16 if self.is_fp16 else np.float32
+                if batch_tensor.dtype != target_dtype:
+                    batch_tensor = batch_tensor.astype(target_dtype)
+                return self.session.run(self.output_names, {self.input_name: batch_tensor})
+

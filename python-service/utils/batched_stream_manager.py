@@ -21,12 +21,12 @@ from utils.gst_ingestor import GstFrameIngestor
 
 class BatchedStreamManager:
     """
-    Centralized Multi-Stream Cadence & DirectML Batched Telemetry Manager.
+    Centralized Multi-Stream Cadence & MobileNetV3-P2PNet DirectML Manager.
     
-    1. Holds all active camera stream ingestors.
+    1. Holds all active camera stream ingestors (GstFrameIngestor).
     2. Runs a single unified 2 FPS cadence loop (500 ms per cycle).
     3. Batches all active frames into a single tensor (Batch=N, 3, 640, 640).
-    4. Executes DirectML inference on AMD Radeon 610M.
+    4. Executes single-pass P2PNet inference on AMD Radeon 610M (DirectML).
     5. Computes 1D temporal forecasts (<0.05 ms) per stream with isolated history.
     6. Pushes a single consolidated JSON telemetry payload to Express backend.
     """
@@ -46,7 +46,7 @@ class BatchedStreamManager:
         self.cadence_interval = 1.0 / max(float(STREAM_TARGET_FPS), 1.0)
         self.worker_thread = threading.Thread(target=self._cadence_loop, daemon=True, name="batched-cadence-worker")
         self.worker_thread.start()
-        print(f"[batched-manager] Cadence loop started at {STREAM_TARGET_FPS} FPS -> Backend: {self.backend_url}")
+        print(f"[batched-manager] Cadence loop started at {STREAM_TARGET_FPS} FPS (P2PNet Engine) -> Backend: {self.backend_url}")
 
     def start_camera(self, camera_id: str, stream_url: str, user_id: Optional[str] = None, zone_name: Optional[str] = None) -> Dict[str, Any]:
         with self.lock:
@@ -131,7 +131,7 @@ class BatchedStreamManager:
 
             if frames:
                 try:
-                    # 1. Single Batched DirectML Dispatch (B=1..4)
+                    # 1. Single-Pass Batched DirectML Dispatch (B=1..4)
                     batch_results = self.detector.detect_batch(
                         frames=frames,
                         camera_ids=camera_ids,
@@ -152,15 +152,18 @@ class BatchedStreamManager:
                             if tracker and analytics:
                                 tracks = tracker.update(detections)
                                 count = res.get("count", len(tracks))
-                                density_mode = res.get("density_mode", False)
-                                overlap_ratio = res.get("overlap_ratio", 0.0)
 
                                 metrics = analytics.build_stream_result(
                                     tracks=tracks,
                                     detections=detections,
                                     count=count,
-                                    density_mode=density_mode,
-                                    overlap_ratio=overlap_ratio,
+                                    density_mode=res.get("density_mode", False),
+                                    overlap_ratio=res.get("overlap_ratio", 0.0),
+                                    sparse_count=res.get("sparse_count"),
+                                    dense_count=res.get("dense_count"),
+                                    dominant_regime=res.get("dominant_regime"),
+                                    dense_clusters=res.get("dense_clusters"),
+                                    regime_breakdown=res.get("regime_breakdown"),
                                 )
 
                                 # 1D Temporal Forecast (<0.05 ms)

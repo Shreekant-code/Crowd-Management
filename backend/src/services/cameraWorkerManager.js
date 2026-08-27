@@ -10,45 +10,36 @@ import { ensureStreamStarted, stopStreamAnalysis } from "./aiPredictionService.j
 import { ensureMediaMtxPath, removeMediaMtxPath, getWhepUrl } from "./mediaGateway.js";
 import { getLocalRtspUrl, isIngestibleSource, shutdownAllIngests } from "./streamIngestor.js";
 
-function getRandomCount() {
-  return Math.floor(Math.random() * 8) + 5; // 5 to 12
-}
-
 function buildResetMetrics(previousMetrics = {}) {
-  const initialCount = previousMetrics?.current_count || getRandomCount();
-  const left = Math.floor(initialCount / 3);
-  const right = Math.floor(initialCount / 3);
-  const center = initialCount - left - right;
-
   return {
     ...previousMetrics,
-    count: initialCount,
-    current_count: initialCount,
-    total_count: Math.max(previousMetrics?.total_count || 0, initialCount + Math.floor(Math.random() * 10) + 5),
-    people_count: initialCount,
-    active_track_ids: Array.from({ length: initialCount }, (_, i) => i + 1),
-    detections: previousMetrics?.detections || [],
-    heatmap_points: previousMetrics?.heatmap_points || [],
-    alerts: previousMetrics?.alerts || [],
-    zone_counts: previousMetrics?.zone_counts || { left, center, right },
-    line_crossing: previousMetrics?.line_crossing || { entry: 1, exit: 0 },
-    crowd_features: previousMetrics?.crowd_features || {
-      density_score: Number((initialCount / 20).toFixed(2)),
-      movement_score: 0.15,
-      congestion_score: Number((initialCount / 25).toFixed(2)),
-      hotspot_ratio: 0.35,
+    count: 0,
+    current_count: 0,
+    total_count: previousMetrics?.total_count || 0,
+    people_count: 0,
+    active_track_ids: [],
+    detections: [],
+    heatmap_points: [],
+    alerts: [],
+    zone_counts: { left: 0, center: 0, right: 0 },
+    line_crossing: previousMetrics?.line_crossing || { entry: 0, exit: 0 },
+    crowd_features: {
+      density_score: 0.0,
+      movement_score: 0.0,
+      congestion_score: 0.0,
+      hotspot_ratio: 0.0,
     },
-    prediction_10min_count: initialCount + Math.floor(Math.random() * 4) + 1,
+    prediction_10min_count: 0,
     prediction_10min_risk: "LOW",
     prediction_10min_label: "Prediction (10 min): LOW RISK",
     prediction_horizon_minutes: 10,
-    risk_score: Number((initialCount / 25).toFixed(2)),
-    risk: previousMetrics?.risk || "Low",
+    risk_score: 0.0,
+    risk: "Low",
     confidence: 0.85,
-    latency_ms: 45,
-    inference_ms: 30,
+    latency_ms: 0,
+    inference_ms: 0,
     camera_health: "good",
-    processing_status: "idle",
+    processing_status: "warming_up",
     updatedAt: new Date().toISOString(),
   };
 }

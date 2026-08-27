@@ -17,7 +17,7 @@ export class WhepClient {
     this.retryTimeout = null;
   }
 
-  async connect(videoElement, attempt = 1, maxAttempts = 4) {
+  async connect(videoElement, attempt = 1, maxAttempts = 15) {
     if (!this.url || !videoElement) {
       throw new Error("WHEP client requires a valid endpoint URL and video element.");
     }
@@ -110,13 +110,13 @@ export class WhepClient {
 
       console.log(`[WHEP-Debug] MediaMTX responded with status: ${response.status} ${response.statusText}`);
 
-      // Handle 404 / 503 while MediaMTX on-demand source is warming up
-      if ((response.status === 404 || response.status === 503) && attempt < maxAttempts && !this.isClosed) {
-        console.warn(`[WHEP-Debug] Stream path is warming up in MediaMTX (${response.status}). Retrying in 1200ms...`);
+      // Handle 400 (upstream source warming up / timeout) / 404 / 503 while MediaMTX stream connects
+      if ((response.status === 400 || response.status === 404 || response.status === 503) && attempt < maxAttempts && !this.isClosed) {
+        console.warn(`[WHEP-Debug] Stream is warming up in MediaMTX (${response.status}, attempt ${attempt}/${maxAttempts}). Retrying in 1500ms...`);
         pc.close();
         this.pc = null;
         await new Promise((res) => {
-          this.retryTimeout = setTimeout(res, 1200);
+          this.retryTimeout = setTimeout(res, 1500);
         });
         if (!this.isClosed) {
           return this.connect(videoElement, attempt + 1, maxAttempts);

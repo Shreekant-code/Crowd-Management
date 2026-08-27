@@ -67,7 +67,7 @@ function normalizeLiveMetrics(payload = {}, camera = null) {
     camera?.metrics?.count ??
     0;
 
-  const currentCount = rawCount > 0 ? rawCount : getRandomCount();
+  const currentCount = Number.isFinite(rawCount) ? rawCount : 0;
 
   return {
     ...(camera?.metrics || {}),

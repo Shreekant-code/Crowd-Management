@@ -40,16 +40,20 @@ export function isIngestibleSource(url = "") {
  * Finds available Python and yt-dlp executable candidates
  */
 function getPythonYtDlpCandidate() {
-  const repoRoot = path.resolve(process.cwd(), "..");
-  const venvPythonWin = path.resolve(repoRoot, ".venv", "Scripts", "python.exe");
-  const venvPythonPosix = path.resolve(repoRoot, ".venv", "bin", "python");
+  const candidates = [
+    path.resolve(process.cwd(), ".venv", "Scripts", "python.exe"),
+    path.resolve(process.cwd(), "..", ".venv", "Scripts", "python.exe"),
+    "C:\\npm_projects\\Crowd-Management\\.venv\\Scripts\\python.exe",
+    path.resolve(process.cwd(), ".venv", "bin", "python"),
+    path.resolve(process.cwd(), "..", ".venv", "bin", "python"),
+  ];
 
-  if (fs.existsSync(venvPythonWin)) {
-    return { command: venvPythonWin, prefixArgs: ["-m", "yt_dlp"] };
+  for (const c of candidates) {
+    if (fs.existsSync(c)) {
+      return { command: c, prefixArgs: ["-m", "yt_dlp"] };
+    }
   }
-  if (fs.existsSync(venvPythonPosix)) {
-    return { command: venvPythonPosix, prefixArgs: ["-m", "yt_dlp"] };
-  }
+
   if (process.env.PYTHON && fs.existsSync(process.env.PYTHON)) {
     return { command: process.env.PYTHON, prefixArgs: ["-m", "yt_dlp"] };
   }
@@ -147,7 +151,7 @@ function runIngestCycle(entry) {
     "--extractor-args",
     "youtube:player_client=web,android",
     "-f",
-    "best[protocol^=m3u8]/best[ext=mp4]/best",
+    "bestvideo[height<=720]/best[height<=720]/best[protocol^=m3u8]/best",
     "-g",
     "--no-warnings",
     "--no-playlist",
@@ -229,6 +233,14 @@ function launchFfmpegPublisher(entry, streamUrl) {
     YOUTUBE_USER_AGENT,
     "-headers",
     `User-Agent: ${YOUTUBE_USER_AGENT}\r\n`,
+    "-probesize",
+    "1000000",
+    "-analyzeduration",
+    "1000000",
+    "-fflags",
+    "+nobuffer+flush_packets",
+    "-flags",
+    "low_delay",
     "-reconnect",
     "1",
     "-reconnect_streamed",

@@ -1,75 +1,82 @@
 import Link from "next/link";
-import { AlertTriangle, RefreshCw, ServerCrash } from "lucide-react";
+import { AlertTriangle, ArrowLeft, RefreshCw, ServerCrash } from "lucide-react";
 
 export function DashboardUnavailable({ operatorName, message }) {
   const isOffline = message?.includes("Backend is unreachable");
   const isSecretMismatch = message?.includes("Frontend and backend secrets do not match");
 
   return (
-    <main className="min-h-screen px-4 py-4 sm:px-6 lg:px-8">
-      <div className="mx-auto flex max-w-4xl flex-col gap-6">
-        <section className="panel-dark relative overflow-hidden p-8 sm:p-10">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(88,211,195,0.22),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(255,126,96,0.18),transparent_32%)]" />
-          <div className="relative space-y-5">
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white/80">
+    <main className="min-h-screen bg-[#080d16] text-slate-100 flex items-center justify-center px-4 py-10 sm:px-6 lg:px-8">
+      {/* Background Grid & Scanline */}
+      <div className="pointer-events-none fixed inset-0 z-0 opacity-40 grid-shell" />
+      <div className="scanline-effect z-10" />
+
+      <div className="relative z-20 mx-auto flex max-w-3xl flex-col gap-6 w-full">
+        <section className="relative overflow-hidden rounded-3xl border border-slate-800 bg-slate-900/90 p-8 sm:p-10 shadow-2xl backdrop-blur-2xl">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(239,68,68,0.18),transparent_40%),radial-gradient(circle_at_85%_85%,rgba(245,158,11,0.12),transparent_40%)]" />
+
+          <div className="relative space-y-4">
+            <div className="inline-flex items-center gap-2 rounded-full border border-red-500/40 bg-red-500/10 px-3.5 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-red-300">
               <ServerCrash className="h-4 w-4" />
-              Backend Connection Required
+              Backend Connection Alert
             </div>
-            <div className="space-y-3">
-              <h1 className="text-3xl font-semibold text-white sm:text-4xl">
-                {isSecretMismatch
-                  ? "Your backend is running, but platform secrets do not match."
-                  : isOffline
-                    ? "Your dashboard is ready, but the backend is offline."
-                    : "Your dashboard could not connect to the platform services."}
-              </h1>
-              <p className="max-w-2xl text-sm leading-6 text-white/75">
-                {message}
-              </p>
-            </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-white">
+              {isSecretMismatch
+                ? "Backend running, but platform secrets do not match."
+                : isOffline
+                  ? "Express backend service is currently offline."
+                  : "Platform service connection error."}
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+              {message}
+            </p>
           </div>
         </section>
 
-        <section className="panel p-6">
-          <div className="flex items-start gap-4">
-            <div className="rounded-2xl bg-amber-50 p-3 text-amber-600">
+        <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 sm:p-8 space-y-5 shadow-2xl backdrop-blur-xl">
+          <div className="flex items-start gap-3.5">
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-amber-400 shrink-0">
               <AlertTriangle className="h-5 w-5" />
             </div>
-            <div className="space-y-4">
+            <div className="space-y-3">
               <div>
-                <p className="text-lg font-semibold text-slate-950">{operatorName}</p>
-                <p className="text-sm text-slate-600">
+                <p className="text-sm font-bold text-white">Operator: {operatorName}</p>
+                <p className="text-xs text-slate-300 mt-0.5">
                   {isSecretMismatch
-                    ? "Use the same PLATFORM_API_SECRET in frontend/.env.local and backend/.env, then restart both servers."
-                    : "Start the backend server on `http://localhost:4000`, then refresh the dashboard."}
+                    ? "Set the same PLATFORM_API_SECRET in frontend/.env.local and backend/.env, then restart both servers."
+                    : "Start the Express backend service on port 4000 using run_services.ps1 or npm run dev in backend."}
                 </p>
               </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 font-mono text-xs text-teal-300 space-y-1">
                 {isSecretMismatch ? (
                   <>
-                    <p><code>frontend/.env.local -&gt; PLATFORM_API_SECRET=platform-secret-change-me</code></p>
-                    <p><code>backend/.env -&gt; PLATFORM_API_SECRET=platform-secret-change-me</code></p>
+                    <p>frontend/.env.local -&gt; PLATFORM_API_SECRET=platform-secret-change-me</p>
+                    <p>backend/.env -&gt; PLATFORM_API_SECRET=platform-secret-change-me</p>
                   </>
                 ) : (
                   <>
-                    <p>`cd backend`</p>
-                    <p>`npm run dev`</p>
+                    <p>.\run_services.ps1</p>
+                    <p className="text-slate-500"># or: cd backend &amp;&amp; npm run dev</p>
                   </>
                 )}
               </div>
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <Link
-                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-medium text-white transition hover:bg-slate-800"
-                  href="/dashboard"
+
+              <div className="flex flex-wrap items-center gap-3 pt-2">
+                <button
+                  onClick={() => window.location.reload()}
+                  type="button"
+                  className="inline-flex items-center gap-2 rounded-xl bg-teal-500 px-4 py-2.5 text-xs font-bold text-slate-950 shadow-lg shadow-teal-500/20 transition hover:bg-teal-400"
                 >
                   <RefreshCw className="h-4 w-4" />
-                  Retry Dashboard
-                </Link>
+                  Retry Connection
+                </button>
                 <Link
-                  className="inline-flex items-center justify-center rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
                   href="/"
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-slate-700"
                 >
-                  Back to Home
+                  <ArrowLeft className="h-4 w-4" />
+                  Return Home
                 </Link>
               </div>
             </div>

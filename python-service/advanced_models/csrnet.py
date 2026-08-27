@@ -10,6 +10,7 @@ from utils.config import (
     CSRNET_INPUT_HEIGHT,
     CSRNET_INPUT_WIDTH,
     DENSE_COUNT_THRESHOLD,
+    DENSITY_MAP_NOISE_FLOOR,
     DENSITY_MAP_OUTPUT_HEIGHT,
     DENSITY_MAP_OUTPUT_WIDTH,
 )
@@ -21,7 +22,7 @@ DEFAULT_MOBILECOUNT_PATH = os.path.join(MODELS_DIR, "mobilecount.onnx")
 class CSRNetDensityEstimator:
     """
     DirectML-Accelerated Lightweight Density Estimator (MobileCount).
-    Replaces the heavy legacy VGG-16 PyTorch CSRNet implementation.
+    Calibrated with Adaptive Noise-Floor Clamping & Morphological Peak Extraction.
     """
 
     def __init__(self, model_path: str = DEFAULT_MOBILECOUNT_PATH) -> None:
@@ -29,6 +30,7 @@ class CSRNetDensityEstimator:
         self.engine: Optional[DirectMLInferenceEngine] = None
         self.enabled = False
         self.load_error: Optional[str] = None
+        self.noise_floor = DENSITY_MAP_NOISE_FLOOR
 
         try:
             if os.path.exists(self.model_path):
@@ -67,12 +69,30 @@ class CSRNetDensityEstimator:
         output = self.engine.infer_batch(batch_tensor)
         density_array = np.squeeze(output)
 
-        count = max(int(round(float(density_array.sum()))), 0)
+        # 1. Apply noise-floor clamping to eliminate spurious background activations in sparse areas
+        clamped_density = np.maximum(density_array - self.noise_floor, 0.0)
+
+        # 2. Extract topological peaks (local maxima in 3x3 window)
+        kernel = np.ones((3, 3), np.uint8)
+        dilated = cv2.dilate(clamped_density, kernel)
+        peaks = (clamped_density == dilated) & (clamped_density > 0.05)
+        peak_count = int(np.sum(peaks))
+
+        # 3. Calibrated integral count
+        integral_sum = float(clamped_density.sum())
+        # In sparse scenes (integral < 10), peak count provides cleaner discretization
+        if integral_sum < 8.0:
+            count = peak_count if peak_count > 0 else int(round(integral_sum))
+        else:
+            count = max(int(round(integral_sum)), peak_count)
+
         h, w = frame.shape[:2]
-        resized_density = cv2.resize(density_array, (w, h), interpolation=cv2.INTER_CUBIC)
+        resized_density = cv2.resize(clamped_density, (w, h), interpolation=cv2.INTER_CUBIC)
 
         return {
             "count": count,
+            "peak_count": peak_count,
+            "integral_sum": round(integral_sum, 2),
             "density_map": np.maximum(resized_density, 0.0).astype(np.float32),
             "input_size": [640, 640],
         }
@@ -108,6 +128,8 @@ class CSRNetDensityEstimator:
                     "enabled": True,
                     "used_density": True,
                     "track_count": len(tracks),
+                    "peak_count": res.get("peak_count", 0),
+                    "integral_sum": res.get("integral_sum", 0.0),
                     "input_size": [640, 640],
                     "frame_size": [w, h],
                     "map_size": [DENSITY_MAP_OUTPUT_WIDTH, DENSITY_MAP_OUTPUT_HEIGHT],

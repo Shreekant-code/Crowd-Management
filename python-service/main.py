@@ -703,7 +703,44 @@ def get_camera_stream_latest(
     }
 
 
+from advanced_models.evacuation_engine import evacuation_engine
+
+
+@app.get("/evacuation/topology")
+def get_evacuation_topology() -> Dict[str, Any]:
+    """Returns static architectural graph topology with physical distances and capacities."""
+    return evacuation_engine.get_topology_payload()
+
+
+@app.post("/evacuation/routes")
+def calculate_dynamic_evacuation_routes(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Computes dynamic congestion-aware evacuation paths across all zones using
+    W_dynamic = D * (1 + alpha * rho).
+    """
+    telemetry = payload.get("telemetry", {}) if payload else {}
+    return evacuation_engine.calculate_all_zone_evacuations(telemetry)
+
+
+@app.post("/evacuation/route")
+def calculate_single_evacuation_route(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Calculates optimal path from a specific source zone to safe target exit."""
+    source = payload.get("source", "Concourse_B")
+    target_exit = payload.get("target_exit")
+    telemetry = payload.get("telemetry", {})
+    return evacuation_engine.calculate_evacuation_route(source, target_exit, telemetry)
+
+
+@app.post("/evacuation/max-flow")
+def calculate_network_max_flow(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Computes Minimum-Cost Maximum-Flow multi-exit crowd distribution."""
+    demands = payload.get("demands") if payload else None
+    telemetry = payload.get("telemetry") if payload else None
+    return evacuation_engine.calculate_min_cost_max_flow(demands, telemetry)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
+
 

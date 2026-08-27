@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { authOptions } from "@/lib/auth";
 import { getAuthErrorMessage } from "@/lib/auth-errors";
-import { ShieldCheck, Waves, LockKeyhole } from "lucide-react";
+import { ShieldCheck, Cpu, Radio, LockKeyhole, ArrowLeft } from "lucide-react";
 import { LoginForm } from "@/components/login-form";
 import { AuthFeedbackToast } from "@/components/auth-feedback-toast";
 
@@ -17,51 +17,67 @@ export default async function LoginPage({ searchParams }) {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-6 py-10">
-      <section className="grid w-full max-w-6xl gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="panel-dark relative overflow-hidden p-8 lg:p-12">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(72,208,193,0.28),transparent_36%),radial-gradient(circle_at_bottom_right,rgba(255,107,87,0.22),transparent_30%)]" />
+    <main className="min-h-screen bg-[#080d16] text-slate-100 flex items-center justify-center px-4 py-10 sm:px-6 lg:px-8">
+      {/* Background Grid & Scanline */}
+      <div className="pointer-events-none fixed inset-0 z-0 opacity-40 grid-shell" />
+      <div className="scanline-effect z-10" />
+
+      <section className="relative z-20 grid w-full max-w-5xl gap-6 lg:grid-cols-[1.1fr_0.9fr] items-center">
+        {/* Left Side: Brand & DirectML Architecture Overview */}
+        <div className="relative overflow-hidden rounded-3xl border border-slate-800 bg-slate-900/90 p-8 lg:p-12 shadow-2xl backdrop-blur-2xl">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(6,182,212,0.18),transparent_40%),radial-gradient(circle_at_bottom_right,rgba(239,68,68,0.12),transparent_40%)]" />
+
           <div className="relative space-y-8">
-            <div className="inline-flex items-center gap-3 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm text-white/80">
-              <ShieldCheck className="h-4 w-4" />
-              Phase-1 cloud operations console
-            </div>
-            <div className="space-y-4">
-              <h1 className="max-w-xl text-4xl font-semibold leading-tight sm:text-5xl">
-                Live crowd intelligence for every zone, stream, and incident.
+            <Link
+              href="/"
+              className="inline-flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white transition"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to Home
+            </Link>
+
+            <div className="space-y-3">
+              <div className="inline-flex items-center gap-2 rounded-full border border-teal-500/40 bg-teal-500/10 px-3.5 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-teal-300">
+                <ShieldCheck className="h-4 w-4" />
+                CrowdSafe Operations Console
+              </div>
+              <h1 className="text-3xl font-extrabold text-white sm:text-4xl leading-tight">
+                Live crowd telemetry for every zone and corridor.
               </h1>
-              <p className="max-w-lg text-base leading-7 text-white/72">
-                Monitor RTSP camera zones, process uploaded footage, and react to risk spikes from one operations dashboard.
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                DirectML edge head detection, 1D Ridge surge forecasting, and dynamic evacuation route guidance.
               </p>
             </div>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
-                <Waves className="mb-3 h-5 w-5 text-teal-300" />
-                <p className="text-sm text-white/70">Multi-camera live monitoring</p>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                <Radio className="mb-2 h-5 w-5 text-teal-400" />
+                <p className="text-xs font-bold text-white">WebRTC WHEP Streams</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">&lt;250ms glass-to-glass latency</p>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
-                <LockKeyhole className="mb-3 h-5 w-5 text-orange-300" />
-                <p className="text-sm text-white/70">Credential protected operator access</p>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
-                <ShieldCheck className="mb-3 h-5 w-5 text-emerald-300" />
-                <p className="text-sm text-white/70">Live alerts with risk-aware triage</p>
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                <Cpu className="mb-2 h-5 w-5 text-indigo-400" />
+                <p className="text-xs font-bold text-white">DirectML Acceleration</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">AMD Radeon 610M FP16 Batch=4</p>
               </div>
             </div>
           </div>
         </div>
-        <div className="panel flex items-center p-8 lg:p-12">
+
+        {/* Right Side: High-Contrast Login Form */}
+        <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 lg:p-10 shadow-2xl backdrop-blur-2xl">
           <div className="w-full space-y-6">
             <AuthFeedbackToast
-              title={authReason ? "Authentication issue" : ""}
+              title={authReason ? "Authentication Alert" : ""}
               description={authReason}
               tone="error"
             />
             <LoginForm initialReason={authReason} />
-            <p className="text-sm text-slate-500">
-              New here?{" "}
-              <Link className="font-semibold text-slateblue" href="/signup">
-                Create an account
+            <p className="text-xs text-slate-400 text-center border-t border-slate-800 pt-4">
+              Need a new workspace?{" "}
+              <Link className="font-bold text-teal-400 hover:text-teal-300 underline underline-offset-2" href="/signup">
+                Create an Operator Account
               </Link>
             </p>
           </div>

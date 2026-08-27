@@ -53,3 +53,17 @@ export async function uploadVideo(formData) {
   });
   return parseResponse(response);
 }
+
+export async function getEvacuationTopology() {
+  const response = await fetch("/api/platform/evacuation", { cache: "no-store" });
+  return parseResponse(response);
+}
+
+export async function calculateEvacuationRoutes(payload = {}) {
+  const response = await fetch("/api/platform/evacuation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseResponse(response);
+}

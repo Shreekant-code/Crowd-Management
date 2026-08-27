@@ -226,29 +226,32 @@ class GstFrameIngestor:
                     capture = cv2.VideoCapture(int(self.rtsp_url))
                 else:
                     if self.rtsp_url.startswith("rtsp://"):
-                        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;3000000"
+                        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|stimeout;2000000"
                     capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
 
-                capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-                if not capture.isOpened():
+                if capture is None or not capture.isOpened():
+                    if capture is not None:
+                        try:
+                            capture.release()
+                        except Exception:
+                            pass
                     if not self.stop_event.is_set():
-                        time.sleep(max(STREAM_RECONNECT_DELAY_SECONDS, 2.0))
+                        time.sleep(max(STREAM_RECONNECT_DELAY_SECONDS, 1.5))
                     continue
 
                 while not self.stop_event.is_set() and capture.isOpened():
-                    now = time.perf_counter()
-                    # Hardware Frame Decimation: skip decoding if interval has not elapsed
-                    if now - last_grabbed_at < frame_interval:
-                        capture.grab()  # Drops frame quickly at hardware buffer level
-                        continue
-
                     ok, raw_frame = capture.read()
                     if not ok or raw_frame is None:
+                        time.sleep(0.02)
                         break
 
+                    now = time.perf_counter()
+                    # Decimate to target FPS without causing buffer stall
+                    if now - last_grabbed_at < frame_interval:
+                        time.sleep(0.005)
+                        continue
+
                     last_grabbed_at = now
-                    # Letterbox to 640x640 to prevent YOLO aspect ratio distortion
                     letterboxed_frame, _, _, _ = letterbox_image(raw_frame, (self.width, self.height))
 
                     with self.lock:
@@ -258,7 +261,10 @@ class GstFrameIngestor:
                 print(f"[gst-ingestor] Fallback reader loop warning: {err}")
             finally:
                 if capture is not None:
-                    capture.release()
+                    try:
+                        capture.release()
+                    except Exception:
+                        pass
 
             if not self.stop_event.is_set():
                 time.sleep(max(STREAM_RECONNECT_DELAY_SECONDS, 2.0))

@@ -88,8 +88,8 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
     const detections = Array.isArray(liveMetrics?.detections) ? liveMetrics.detections : [];
     const now = performance.now();
 
-    detections.forEach((det) => {
-      const trackId = det.id ?? det.track_id;
+    detections.forEach((det, idx) => {
+      const trackId = det.id ?? det.track_id ?? (det.trackId != null ? det.trackId : idx);
       if (trackId == null) return;
 
       const [x, y, w, h] = getDetectionBox(det);
@@ -276,35 +276,35 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
         }
       }
 
-      const scaleX = renderWidth / Math.max(videoWidth, 1);
-      const scaleY = renderHeight / Math.max(videoHeight, 1);
+      // Adaptive coordinate projection mapping (handles normalized 0..1, 640x640 model space, and 1080p canvas)
+      function toScreen(x, y, w, h) {
+        const isNorm = x <= 1.0 && y <= 1.0 && w <= 1.0 && h <= 1.0 && (w > 0 || h > 0);
+        
+        let normX, normY, normW, normH;
+        if (isNorm) {
+          normX = Math.max(0, Math.min(x, 1.0));
+          normY = Math.max(0, Math.min(y, 1.0));
+          normW = Math.max(w, 0.01);
+          normH = Math.max(h, 0.01);
+        } else {
+          // If max coordinate <= 640, detections are in 640x640 model coordinate space
+          const coordBaseW = (x <= 640 && y <= 640 && w <= 640 && h <= 640) ? 640.0 : 1920.0;
+          const coordBaseH = coordBaseW === 640.0 ? 640.0 : 1080.0;
+          normX = Math.max(0, Math.min(x / coordBaseW, 1.0));
+          normY = Math.max(0, Math.min(y / coordBaseH, 1.0));
+          normW = Math.max(w / coordBaseW, 0.015);
+          normH = Math.max(h / coordBaseH, 0.015);
+        }
 
-      // 1. Draw Density Heatmap Circles
-      const heatmapPoints = Array.isArray(metrics.heatmap_points) ? metrics.heatmap_points : [];
-      const recentHeatmapPoints = heatmapPoints.slice(-120);
-
-      for (let index = 0; index < recentHeatmapPoints.length; index += 1) {
-        const point = recentHeatmapPoints[index];
-        const recency = (index + 1) / Math.max(recentHeatmapPoints.length, 1);
-        const x = offsetX + (point.x ?? 0) * scaleX;
-        const y = offsetY + (point.y ?? 0) * scaleY;
-        const radius = 10 + recency * 24;
-        const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
-        gradient.addColorStop(0, `rgba(239, 68, 68, ${0.22 + recency * 0.28})`);
-        gradient.addColorStop(0.35, `rgba(249, 115, 22, ${0.12 + recency * 0.18})`);
-        gradient.addColorStop(0.68, `rgba(250, 204, 21, ${0.06 + recency * 0.12})`);
-        gradient.addColorStop(1, "rgba(250, 204, 21, 0)");
-        context.fillStyle = gradient;
-        context.beginPath();
-        context.arc(x, y, radius, 0, Math.PI * 2);
-        context.fill();
+        return {
+          left: offsetX + normX * renderWidth,
+          top: offsetY + normY * renderHeight,
+          boxWidth: Math.max(normW * renderWidth, 8),
+          boxHeight: Math.max(normH * renderHeight, 8),
+        };
       }
 
-      // 2. Draw Smooth Track-ID LERP Bounding Boxes
-      const accent = getRiskAccent(metrics.risk || "Low");
-      context.lineWidth = 2;
-      context.font = "12px sans-serif";
-
+      // 1. Update LERP interpolation for all active tracks & prune stale
       for (const [trackId, state] of trackStatesRef.current.entries()) {
         if (now - state.lastSeen > 1200) {
           trackStatesRef.current.delete(trackId);
@@ -315,25 +315,78 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
         for (let i = 0; i < 4; i++) {
           state.current[i] += (state.target[i] - state.current[i]) * ALPHA;
         }
+      }
 
-        const [x, y, w, h] = state.current;
-        const left = offsetX + x * scaleX;
-        const top = offsetY + y * scaleY;
-        const boxWidth = w * scaleX;
-        const boxHeight = h * scaleY;
+      // 2. Collect render items (tracked states with LERP, or fallback to raw detections)
+      const renderItems = [];
+      if (trackStatesRef.current.size > 0) {
+        for (const [trackId, state] of trackStatesRef.current.entries()) {
+          const [x, y, w, h] = state.current;
+          const proj = toScreen(x, y, w, h);
+          renderItems.push({
+            trackId,
+            ...proj,
+          });
+        }
+      } else if (Array.isArray(metrics.detections) && metrics.detections.length > 0) {
+        metrics.detections.forEach((det, idx) => {
+          const [x, y, w, h] = getDetectionBox(det);
+          const proj = toScreen(x, y, w, h);
+          renderItems.push({
+            trackId: det.id ?? det.track_id ?? idx + 1,
+            ...proj,
+          });
+        });
+      }
 
+      // 3. Draw P2PNet Head Center Focal Dots & Sheer Radial Auras
+      renderItems.forEach((item) => {
+        const centerX = item.left + item.boxWidth / 2;
+        const centerY = item.top + item.boxHeight / 2;
+
+        // Circular Radial Aura
+        const gradient = context.createRadialGradient(
+          centerX,
+          centerY,
+          2,
+          centerX,
+          centerY,
+          16
+        );
+        gradient.addColorStop(0, "rgba(249, 115, 22, 0.45)"); // Sheer Orange-Red Core
+        gradient.addColorStop(0.5, "rgba(249, 115, 22, 0.15)"); // Mid-tone
+        gradient.addColorStop(1, "rgba(249, 115, 22, 0.00)");  // Transparent Falloff
+
+        context.beginPath();
+        context.arc(centerX, centerY, 16, 0, 2 * Math.PI);
+        context.fillStyle = gradient;
+        context.fill();
+
+        // High-Visibility Head Center Dot (P2PNet Point)
+        context.beginPath();
+        context.arc(centerX, centerY, 4, 0, 2 * Math.PI);
+        context.fillStyle = "#F97316";
+        context.fill();
+      });
+
+      // 4. Draw Smooth Track-ID LERP Bounding Boxes and Chips
+      const accent = getRiskAccent(metrics.risk || "Low");
+      context.lineWidth = 1.5;
+      context.font = "12px sans-serif";
+
+      renderItems.forEach((item) => {
         context.strokeStyle = accent.stroke;
         context.fillStyle = accent.fill;
-        context.strokeRect(left, top, boxWidth, boxHeight);
-        context.fillRect(left, top, boxWidth, boxHeight);
+        context.strokeRect(item.left, item.top, item.boxWidth, item.boxHeight);
+        context.fillRect(item.left, item.top, item.boxWidth, item.boxHeight);
 
-        const label = `ID: ${trackId}`;
+        const label = `ID: ${item.trackId}`;
         const textWidth = context.measureText(label).width;
         context.fillStyle = accent.chip;
-        context.fillRect(left, Math.max(top - 18, 0), textWidth + 10, 18);
+        context.fillRect(item.left, Math.max(item.top - 18, 0), textWidth + 10, 18);
         context.fillStyle = "#f8fafc";
-        context.fillText(label, left + 5, Math.max(top - 5, 12));
-      }
+        context.fillText(label, item.left + 5, Math.max(item.top - 5, 12));
+      });
 
       animationFrameId = window.requestAnimationFrame(drawOverlay);
     };

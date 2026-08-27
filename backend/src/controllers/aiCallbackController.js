@@ -3,6 +3,7 @@ import alertRepository from "../data/alertRepository.js";
 import { registerUploadResult } from "../services/aiPredictionService.js";
 import { emitAlert, emitCamera, emitDashboard } from "../services/socketHub.js";
 import { buildGlobalAnalytics } from "../services/globalAnalyticsEngine.js";
+import workerManager from "../services/cameraWorkerManager.js";
 
 async function receiveUploadResult(req, res) {
   if (!req.body?.job_id) {
@@ -82,16 +83,7 @@ async function receiveTelemetryBatch(req, res) {
 
   // Broadcast updated dashboard summaries to affected user dashboards
   for (const userId of userIdsToUpdate) {
-    const userCameras = cameraRepository.listByUser(userId);
-    const alerts = alertRepository.listByUser(userId, { limit: 20 });
-    const globalAnalytics = buildGlobalAnalytics(userCameras, alerts);
-
-    emitDashboard(userId, {
-      cameras: userCameras,
-      alerts,
-      analytics: globalAnalytics,
-      updatedAt: new Date().toISOString(),
-    });
+    workerManager.broadcastDashboard(userId);
   }
 
   return res.json({

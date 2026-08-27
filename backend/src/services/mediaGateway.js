@@ -47,9 +47,9 @@ export async function ensureMediaMtxPath(cameraId, sourceUrl) {
 
   const pathName = getMediaMtxPathName(cameraId);
 
-  // If source is a YouTube webpage, use local streamIngestor worker (yt-dlp -> FFmpeg -> MediaMTX RTSP push)
-  // This avoids MediaMTX pulling directly from YouTube, which causes HTTP 403 Forbidden timeouts.
-  if (isIngestibleSource(normalizedSource)) {
+  // If source is a YouTube webpage, route through local streamIngestor worker (yt-dlp -> FFmpeg -> MediaMTX RTSP push)
+  // This bypasses MediaMTX internal Go HLS client limit ("size exceeds maximum allowed")
+  if (isIngestibleSource(normalizedSource) || normalizedSource.includes("youtube.com") || normalizedSource.includes("youtu.be")) {
     console.log(`[MediaGateway-Debug] Routing YouTube source through StreamIngestor for cam_${cameraId}`);
     
     // Clean up any stale on-demand path registration in MediaMTX REST API
@@ -68,9 +68,7 @@ export async function ensureMediaMtxPath(cameraId, sourceUrl) {
 
   const payload = {
     source: normalizedSource,
-    sourceOnDemand: true,
-    sourceOnDemandCloseAfter: "10s",
-    sourceOnDemandStartTimeout: "10s",
+    sourceOnDemand: false,
   };
 
   console.log(`[MediaGateway-Debug] Registering direct path in MediaMTX at ${addUrl} with source: ${normalizedSource.slice(0, 60)}...`);

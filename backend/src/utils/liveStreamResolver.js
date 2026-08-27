@@ -258,14 +258,15 @@ function extractPlayerResponseData(text = "") {
 }
 
 function getPythonCandidates() {
-  const repoRoot = path.resolve(process.cwd(), "..");
   const pythonCandidates = [
     process.env.PYTHON,
     process.env.PYTHON_EXECUTABLE,
     process.env.PYTHON_PATH,
-    process.platform === "win32"
-      ? path.resolve(repoRoot, ".venv", "Scripts", "python.exe")
-      : path.resolve(repoRoot, ".venv", "bin", "python"),
+    path.resolve(process.cwd(), ".venv", "Scripts", "python.exe"),
+    path.resolve(process.cwd(), "..", ".venv", "Scripts", "python.exe"),
+    path.resolve("C:\\npm_projects\\Crowd-Management", ".venv", "Scripts", "python.exe"),
+    path.resolve(process.cwd(), ".venv", "bin", "python"),
+    path.resolve(process.cwd(), "..", ".venv", "bin", "python"),
     "python",
     "python3",
   ];
@@ -278,12 +279,14 @@ async function tryResolveWithPythonYtDlp(targetUrl) {
   const commonArgs = [
     "-m",
     "yt_dlp",
+    "--extractor-args",
+    "youtube:player_client=web,android",
     "--no-warnings",
     "--no-playlist",
     "--skip-download",
     "--get-url",
     "--format",
-    "best[protocol^=m3u8]/best",
+    "bestvideo[height<=720]/best[height<=720]/best[protocol^=m3u8]/best",
     targetUrl,
   ];
 

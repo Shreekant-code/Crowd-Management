@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 from collections import deque
 from datetime import datetime, timezone
 from math import sqrt
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+import numpy as np
 
 from advanced_models.convlstm import ConvLSTMPredictor
 from advanced_models.csrnet import CSRNetDensityEstimator
@@ -10,15 +13,18 @@ from utils.config import (
     CONGESTION_ALERT_THRESHOLD,
     DEBUG_EVERY_N_FRAMES,
     DENSITY_ALERT_THRESHOLD,
+    DENSE_CLUSTER_DIST_THRESHOLD,
     DENSE_COUNT_THRESHOLD,
     ENABLE_ADVANCED_MODELS,
     HEATMAP_HISTORY,
     MOVEMENT_ALERT_THRESHOLD,
     MOVEMENT_HISTORY,
     OVERCROWD_THRESHOLD,
+    SPARSE_CLUSTER_DIST_THRESHOLD,
     SUDDEN_SPIKE_THRESHOLD,
     TEMPORAL_SEQUENCE_LENGTH,
 )
+from utils.density_analyzer import SpatialDensityAnalyzer
 
 
 def utc_now() -> str:
@@ -47,8 +53,16 @@ class AnalyticsEngine:
         self.last_count = 0
         self.movement_history: deque[float] = deque(maxlen=MOVEMENT_HISTORY)
         self.speed_history: deque[float] = deque(maxlen=MOVEMENT_HISTORY)
+        self.line_crossing: Dict[str, int] = {"entry": 0, "exit": 0}
         self.temporal_model = ConvLSTMPredictor() if advanced_enabled else None
         self.density_model = CSRNetDensityEstimator() if advanced_enabled else None
+        self.density_analyzer = SpatialDensityAnalyzer(
+            grid_rows=6,
+            grid_cols=6,
+            sparse_dist_threshold=SPARSE_CLUSTER_DIST_THRESHOLD,
+            dense_dist_threshold=DENSE_CLUSTER_DIST_THRESHOLD,
+            k_neighbors=3,
+        )
 
     def reset(self) -> None:
         self.heatmap_history.clear()
@@ -60,6 +74,7 @@ class AnalyticsEngine:
         self.last_count = 0
         self.movement_history.clear()
         self.speed_history.clear()
+        self.line_crossing = {"entry": 0, "exit": 0}
 
     def update(
         self,
@@ -225,10 +240,23 @@ class AnalyticsEngine:
         alerts = self._build_alerts(current_count, crowd_features)
         risk = self._derive_composite_risk(current_count, crowd_features)
 
+        regime_info = self.density_analyzer.analyze_detections(
+            tracks,
+            frame_shape=(height, width),
+        )
+
         result: Dict[str, Any] = {
             "frame_id": frame_id,
             "people_count": current_count,
             "current_count": current_count,
+            "sparse_count": regime_info["sparse_count"],
+            "dense_count": regime_info["dense_count"],
+            "dominant_regime": regime_info["dominant_regime"],
+            "density_mode": regime_info["dominant_regime"] == "DENSE",
+            "sparse_ratio": regime_info["sparse_ratio"],
+            "dense_ratio": regime_info["dense_ratio"],
+            "dense_clusters": regime_info["dense_clusters"],
+            "regime_breakdown": regime_info,
             "total_count": total_count,
             "density_count": density_count,
             "base_count": int(round(base_count)),
@@ -258,6 +286,7 @@ class AnalyticsEngine:
             print(
                 f"[analytics] frame={frame_id} shape=({height},{width}) "
                 f"detections={len(detections)} tracked={len(current_detected_ids)} "
+                f"sparse={regime_info['sparse_count']} dense={regime_info['dense_count']} "
                 f"current_count={current_count} total_count={total_count}"
             )
 
@@ -269,6 +298,13 @@ class AnalyticsEngine:
             "frame_id": None,
             "people_count": 0,
             "current_count": 0,
+            "sparse_count": 0,
+            "dense_count": 0,
+            "dominant_regime": "SPARSE",
+            "sparse_ratio": 1.0,
+            "dense_ratio": 0.0,
+            "dense_clusters": [],
+            "regime_breakdown": {},
             "total_count": 0,
             "density_count": 0,
             "base_count": 0,
@@ -315,42 +351,104 @@ class AnalyticsEngine:
         count: int,
         density_mode: bool = False,
         overlap_ratio: float = 0.0,
+        sparse_count: Optional[int] = None,
+        dense_count: Optional[int] = None,
+        dominant_regime: Optional[str] = None,
+        dense_clusters: Optional[List[Dict[str, Any]]] = None,
+        regime_breakdown: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         zone_counts = {"left": 0, "center": 0, "right": 0}
         heatmap_points = []
+        movement_samples = []
+
+        # Determine coordinate space: 1920p native or 640p letterbox
+        base_width = 1920.0
+        midline_x = base_width / 2.0
+        left_bound = base_width / 3.0
+        right_bound = (2.0 * base_width) / 3.0
 
         for track in tracks:
-            cx, cy = track.get("center", [320, 320])
+            track_id = int(track.get("id", 0))
+            cx, cy = track.get("center", [960, 540])
             heatmap_points.append({"x": cx, "y": cy})
-            if cx < 213:
+
+            # Sector partitioning
+            if cx < left_bound:
                 zone_counts["left"] += 1
-            elif cx < 426:
+            elif cx < right_bound:
                 zone_counts["center"] += 1
             else:
                 zone_counts["right"] += 1
+
+            # Line crossing & movement tracking
+            prev_pos = self.last_positions.get(track_id)
+            if prev_pos is not None:
+                dx = cx - prev_pos[0]
+                dy = cy - prev_pos[1]
+                dist = sqrt(dx * dx + dy * dy)
+                movement_samples.append(dist / 2200.0)
+
+                prev_side = self.last_sides.get(track_id)
+                curr_side = "left" if cx < midline_x else "right"
+                if prev_side and prev_side != curr_side:
+                    if prev_side == "left" and curr_side == "right":
+                        self.line_crossing["entry"] += 1
+                    elif prev_side == "right" and curr_side == "left":
+                        self.line_crossing["exit"] += 1
+                self.last_sides[track_id] = curr_side
+            else:
+                self.last_sides[track_id] = "left" if cx < midline_x else "right"
+
+            self.last_positions[track_id] = (cx, cy)
 
         self.heatmap_history.extend([(p["x"], p["y"]) for p in heatmap_points])
         effective_count = int(count)
         risk = derive_risk(effective_count)
 
+        avg_movement = float(np.mean(movement_samples)) if movement_samples else 0.12
+        density_score = round(min(effective_count / 30.0, 1.0), 4)
+        max_sector_count = max(zone_counts.values()) if zone_counts else 0
+        hotspot_ratio = round(max_sector_count / max(effective_count, 1), 4)
+
+        if regime_breakdown is None:
+            regime_info = self.density_analyzer.analyze_detections(
+                tracks if tracks else detections,
+                frame_shape=(1080, 1920),
+            )
+        else:
+            regime_info = regime_breakdown
+
+        sparse_cnt = sparse_count if sparse_count is not None else regime_info.get("sparse_count", effective_count)
+        dense_cnt = dense_count if dense_count is not None else regime_info.get("dense_count", 0)
+        dom_regime = dominant_regime or regime_info.get("dominant_regime", "SPARSE")
+        clusters = dense_clusters if dense_clusters is not None else regime_info.get("dense_clusters", [])
+
         crowd_features = {
-            "density_score": round(min(effective_count / 30.0, 1.0), 4),
-            "movement_score": 0.15,
-            "congestion_score": round(overlap_ratio, 4),
-            "hotspot_ratio": round(min(len(heatmap_points) / 20.0, 1.0), 4),
+            "density_score": density_score,
+            "movement_score": round(min(avg_movement * 5.0, 1.0), 4),
+            "congestion_score": round(overlap_ratio if overlap_ratio > 0 else min(effective_count / 40.0, 1.0), 4),
+            "hotspot_ratio": hotspot_ratio,
         }
 
         return {
             "people_count": effective_count,
             "current_count": effective_count,
             "count": effective_count,
-            "density_count": effective_count if density_mode else 0,
-            "density_mode": density_mode,
+            "sparse_count": sparse_cnt,
+            "dense_count": dense_cnt,
+            "dominant_regime": dom_regime,
+            "density_mode": dom_regime == "DENSE" or density_mode,
+            "sparse_ratio": regime_info.get("sparse_ratio", 1.0),
+            "dense_ratio": regime_info.get("dense_ratio", 0.0),
+            "dense_clusters": clusters,
+            "regime_breakdown": regime_info,
+            "density_count": effective_count if (density_mode or dom_regime == "DENSE") else 0,
             "overlap_ratio": overlap_ratio,
             "active_track_ids": [t.get("id") for t in tracks if "id" in t],
             "detections": tracks if tracks else detections,
             "heatmap_points": [{"x": x, "y": y} for x, y in list(self.heatmap_history)],
             "zone_counts": zone_counts,
+            "line_crossing": dict(self.line_crossing),
             "risk": risk,
             "crowd_features": crowd_features,
             "risk_score": round(min(effective_count / 30.0, 1.0), 4),
@@ -363,6 +461,13 @@ class AnalyticsEngine:
             **base,
             "people_count": 0,
             "current_count": 0,
+            "sparse_count": 0,
+            "dense_count": 0,
+            "dominant_regime": "SPARSE",
+            "sparse_ratio": 1.0,
+            "dense_ratio": 0.0,
+            "dense_clusters": [],
+            "regime_breakdown": {},
             "active_track_ids": [],
             "detections": [],
             "heatmap_points": [],
