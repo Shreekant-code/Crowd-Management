@@ -33,9 +33,21 @@ async function receiveTelemetryBatch(req, res) {
     }
 
     const currentMetrics = camera.metrics || {};
-    const count = Number(telemetry.count ?? telemetry.people_count ?? currentMetrics.count ?? 0);
+    const count = Number(
+      telemetry.count ??
+      telemetry.current_count ??
+      telemetry.people_count ??
+      telemetry.sparse_count ??
+      currentMetrics.count ??
+      0
+    );
+    const sparseCount = Number(telemetry.sparse_count ?? telemetry.sparseCount ?? count);
+    const denseCount = Number(telemetry.dense_count ?? telemetry.denseCount ?? 0);
+    const dominantRegime = telemetry.dominant_regime || telemetry.dominantRegime || (denseCount > 0 ? "DENSE" : "SPARSE");
+    const pred10m = Number(telemetry.prediction_10min_count ?? telemetry.predicted_crowd ?? count);
     const risk = telemetry.risk || (count > 30 ? "High" : count > 15 ? "Medium" : "Low");
     const riskScore = Number(telemetry.risk_score ?? (count / 30.0).toFixed(2));
+    const nowIso = telemetry.updatedAt || telemetry.updated_at || new Date().toISOString();
 
     const updatedMetrics = {
       ...currentMetrics,
@@ -43,15 +55,22 @@ async function receiveTelemetryBatch(req, res) {
       count,
       current_count: count,
       people_count: count,
+      sparse_count: sparseCount,
+      dense_count: denseCount,
+      dominant_regime: dominantRegime,
+      prediction_10min_count: pred10m,
+      prediction_10min_risk: telemetry.prediction_10min_risk || (pred10m > 30 ? "HIGH" : pred10m > 15 ? "MEDIUM" : "LOW"),
+      prediction_10min_label: telemetry.prediction_10min_label || `Prediction (10 min): ${pred10m > 30 ? "HIGH" : pred10m > 15 ? "MEDIUM" : "LOW"} RISK`,
       risk,
       risk_score: riskScore,
       camera_health: "good",
       processing_status: "streaming",
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso,
+      updated_at: nowIso,
     };
 
     camera.metrics = updatedMetrics;
-    camera.lastFrameAt = updatedMetrics.updatedAt;
+    camera.lastFrameAt = nowIso;
     cameraRepository.save(camera);
 
     userIdsToUpdate.add(camera.userId);

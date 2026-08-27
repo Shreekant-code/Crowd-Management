@@ -26,7 +26,17 @@ export function AnalyticsStudio({ cameras = [], global = {} }) {
     }));
   });
 
-  const totalCrowd = Number(global.totalCrowd || cameras.reduce((acc, c) => acc + Number(c.metrics?.current_count ?? c.metrics?.count ?? 0), 0));
+  const totalCrowd = Number(
+    global.totalCrowd ||
+    cameras.reduce((acc, c) => acc + Number(
+      c.metrics?.current_count ??
+      c.metrics?.count ??
+      c.metrics?.people_count ??
+      c.metrics?.sparse_count ??
+      c.metrics?.raw_count ??
+      0
+    ), 0)
+  );
   const projectedCrowd = Number(global.globalPrediction?.projectedCount ?? (totalCrowd * 1.25).toFixed(0));
   const confidence = Number(global.globalPrediction?.confidence ?? global.predictionConfidence ?? 0.92);
   const trend = global.trend || global.globalPrediction?.trend || "STABLE";
@@ -251,7 +261,14 @@ export function AnalyticsStudio({ cameras = [], global = {} }) {
             {/* Per Camera Bars */}
             <div className="mt-4 space-y-3.5">
               {cameras.map((camera) => {
-                const count = Number(camera.metrics?.current_count ?? camera.metrics?.count ?? 0);
+                const count = Number(
+                  camera.metrics?.current_count ??
+                  camera.metrics?.count ??
+                  camera.metrics?.people_count ??
+                  camera.metrics?.sparse_count ??
+                  camera.metrics?.raw_count ??
+                  0
+                );
                 const pct = Math.min(Math.round((count / 100) * 100), 100);
                 const risk = camera.metrics?.risk || "Low";
 

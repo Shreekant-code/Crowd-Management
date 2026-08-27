@@ -30,7 +30,13 @@ export function CameraSpotlightModal({ camera, onClose, onCameraLiveUpdate }) {
     }));
   });
 
-  const liveCount = Number(camera?.metrics?.current_count ?? camera?.metrics?.count ?? 0);
+  const liveCount = Number(
+    camera?.metrics?.current_count ??
+    camera?.metrics?.count ??
+    camera?.metrics?.people_count ??
+    camera?.metrics?.sparse_count ??
+    0
+  );
   const forecastCount = Number(camera?.metrics?.prediction_10min_count ?? camera?.metrics?.predicted_crowd ?? liveCount);
   const risk = camera?.metrics?.risk || "Low";
   const dominantRegime = camera?.metrics?.dominant_regime || (camera?.metrics?.density_mode ? "DENSE" : "SPARSE");

@@ -86,7 +86,7 @@ async function getLatestStreamAnalysis({ cameraId, streamUrl, userId, zoneName }
       return null;
     }
 
-    const updatedAt = response.result.updated_at || response.updated_at;
+    const updatedAt = response.result.updatedAt || response.result.updated_at || response.updatedAt || response.updated_at;
     if (updatedAt) {
       const freshness = Date.now() - new Date(updatedAt).getTime();
       if (freshness > aiStreamFreshnessMs) {

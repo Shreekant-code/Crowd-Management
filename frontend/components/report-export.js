@@ -15,7 +15,17 @@ import {
 export function ReportExportModal({ cameras = [], global = {}, alerts = [], onClose }) {
   const reportRef = useRef(null);
 
-  const totalCrowd = Number(global?.totalCrowd || cameras.reduce((sum, c) => sum + Number(c.metrics?.current_count ?? c.metrics?.count ?? 0), 0));
+  const totalCrowd = Number(
+    global?.totalCrowd ||
+    cameras.reduce((sum, c) => sum + Number(
+      c.metrics?.current_count ??
+      c.metrics?.count ??
+      c.metrics?.people_count ??
+      c.metrics?.sparse_count ??
+      c.metrics?.raw_count ??
+      0
+    ), 0)
+  );
   const projectedCrowd = Number(global?.globalPrediction?.projectedCount ?? (totalCrowd * 1.25).toFixed(0));
   const overallRisk = global?.overallRisk || "Low";
   const confidence = Number(global?.globalPrediction?.confidence ?? global?.predictionConfidence ?? 0.88);
@@ -28,7 +38,14 @@ export function ReportExportModal({ cameras = [], global = {}, alerts = [], onCl
     const headers = "Zone Name,Sensor Name,Status,Current Count,10m Forecast,Growth Rate,Regime Mode,DirectML Latency (ms),Risk Level\n";
     const rows = cameras
       .map((c) => {
-        const live = c.metrics?.current_count ?? c.metrics?.count ?? 0;
+        const live = Number(
+          c.metrics?.current_count ??
+          c.metrics?.count ??
+          c.metrics?.people_count ??
+          c.metrics?.sparse_count ??
+          c.metrics?.raw_count ??
+          0
+        );
         const pred = c.metrics?.prediction_10min_count ?? live;
         const rate = c.metrics?.growth_rate_per_min ?? 0;
         const regime = c.metrics?.dominant_regime || "SPARSE";

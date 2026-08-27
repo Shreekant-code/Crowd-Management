@@ -65,15 +65,9 @@ class PersonDetector:
             return []
 
         h, w = sanitized.shape[:2]
-        # Resize to 640x640 for detector
-        if (w, h) != (640, 640):
-            resized = cv2.resize(sanitized, (640, 640))
-        else:
-            resized = sanitized
-
         with self.lock:
             batch_results = self.batched_detector.process_camera_batch(
-                batch_frames=[resized],
+                batch_frames=[sanitized],
                 camera_ids=["single_camera"],
                 orig_shapes=[(h, w)],
             )
@@ -104,14 +98,9 @@ class PersonDetector:
             }
 
         h, w = sanitized.shape[:2]
-        if (w, h) != (640, 640):
-            resized = cv2.resize(sanitized, (640, 640))
-        else:
-            resized = sanitized
-
         with self.lock:
             batch_results = self.batched_detector.process_camera_batch(
-                batch_frames=[resized],
+                batch_frames=[sanitized],
                 camera_ids=["single_camera"],
                 orig_shapes=[(h, w)],
             )

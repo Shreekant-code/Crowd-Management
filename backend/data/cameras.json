@@ -1,14 +1,14 @@
 [
   {
-    "id": "15af0b6a-c5d7-4b3d-825b-f4591776400b",
+    "id": "6e166aa4-7959-4065-9a30-fadcc98d6f44",
     "userId": "e57605de-ba09-43a5-90c1-ee2d135be57c",
-    "name": "CAM 1",
-    "zoneName": "F1",
-    "location": "xyz",
-    "streamUrl": "https://www.youtube.com/live/IApccLPe7ms?si=scmeTcUgAMtJ4huz",
+    "name": "CAM 2",
+    "zoneName": "Z1",
+    "location": "xza",
+    "streamUrl": "https://www.youtube.com/live/QhFYcPBmkcI?si=rRKNntLHRFTfbVP3",
     "sourceType": "public",
     "status": "stopped",
-    "createdAt": "2026-08-27T02:17:47.499Z",
+    "createdAt": "2026-08-27T03:16:19.536Z",
     "metrics": {
       "count": 0,
       "current_count": 0,
@@ -22,7 +22,7 @@
       "detections": [],
       "heatmap_points": [],
       "line_crossing": {
-        "entry": 1,
+        "entry": 0,
         "exit": 1
       },
       "zone_counts": {
@@ -45,10 +45,10 @@
       "risk": "Low",
       "risk_score": 0,
       "processing_status": "warming_up",
-      "updatedAt": "2026-08-27T02:19:31.769Z",
+      "updatedAt": "2026-08-27T04:16:53.870Z",
       "stream_resolution_status": "youtube_resolved",
       "stream_resolution_error": null,
-      "webrtc_url": "http://localhost:8889/cam_15af0b6a-c5d7-4b3d-825b-f4591776400b/whep",
+      "webrtc_url": "http://localhost:8889/cam_6e166aa4-7959-4065-9a30-fadcc98d6f44/whep",
       "alerts": [],
       "density_count": 0,
       "base_count": 0,
@@ -56,13 +56,13 @@
       "smoothed_count": 0,
       "final_count": 0,
       "source": "python-service",
-      "sparse_count": 15,
+      "sparse_count": 3,
       "dense_count": 0,
       "dominant_regime": "SPARSE",
       "dense_clusters": [],
       "regime_breakdown": {
         "dominant_regime": "SPARSE",
-        "sparse_count": 15,
+        "sparse_count": 3,
         "dense_count": 0,
         "sparse_ratio": 1,
         "dense_ratio": 0,
@@ -72,28 +72,20 @@
             0,
             0,
             0,
-            0.6666666865348816,
-            0.3333333432674408,
+            0,
+            0,
             0
           ],
           [
+            0,
+            0,
+            0,
             0,
             1,
-            0.3333333432674408,
-            0,
-            0,
-            0.3333333432674408
-          ],
-          [
-            0.3333333432674408,
-            0,
-            0,
-            0.3333333432674408,
-            0,
             0
           ],
           [
-            0.3333333432674408,
+            0,
             0,
             0,
             0,
@@ -101,341 +93,110 @@
             0
           ],
           [
+            1,
             0,
             0,
+            1,
             0,
-            0.6666666865348816,
-            0.3333333432674408,
             0
           ],
           [
             0,
             0,
             0,
-            0.3333333432674408,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
             0,
             0
           ]
         ],
         "sparse_detections": [
           {
-            "id": 86,
-            "point": [
-              1335,
-              847
-            ],
-            "bbox": [
-              1230,
-              624,
-              210,
-              447
-            ],
-            "bbox_xyxy": [
-              1230,
-              624,
-              1440,
-              1071
-            ],
-            "confidence": 0.856
-          },
-          {
-            "id": 67,
-            "point": [
-              1122,
-              780
-            ],
-            "bbox": [
-              1044,
-              564,
-              156,
-              432
-            ],
-            "bbox_xyxy": [
-              1044,
-              564,
-              1200,
-              996
-            ],
-            "confidence": 0.824
-          },
-          {
-            "id": 53,
-            "point": [
-              1272,
-              454
-            ],
-            "bbox": [
-              1212,
-              315,
-              120,
-              279
-            ],
-            "bbox_xyxy": [
-              1212,
-              315,
-              1332,
-              594
-            ],
-            "confidence": 0.778
-          },
-          {
-            "id": 74,
-            "point": [
-              982,
-              813
-            ],
-            "bbox": [
-              915,
-              648,
-              135,
-              330
-            ],
-            "bbox_xyxy": [
-              915,
-              648,
-              1050,
-              978
-            ],
-            "confidence": 0.753
-          },
-          {
-            "id": 101,
-            "point": [
-              1074,
-              915
-            ],
-            "bbox": [
-              996,
-              759,
-              156,
-              312
-            ],
-            "bbox_xyxy": [
-              996,
-              759,
-              1152,
-              1071
-            ],
-            "confidence": 0.675
-          },
-          {
             "id": 10,
             "point": [
-              741,
-              243
+              1023,
+              625
             ],
             "bbox": [
-              720,
-              183,
-              42,
-              120
+              975,
+              483,
+              96,
+              285
             ],
             "bbox_xyxy": [
-              720,
-              183,
-              762,
-              303
+              975,
+              483,
+              1071,
+              768
             ],
-            "confidence": 0.672
+            "confidence": 0.825
           },
           {
-            "id": 22,
+            "id": 2,
             "point": [
-              403,
-              321
+              1567,
+              351
             ],
             "bbox": [
-              375,
-              255,
-              57,
-              132
-            ],
-            "bbox_xyxy": [
-              375,
-              255,
-              432,
-              387
-            ],
-            "confidence": 0.659
-          },
-          {
-            "id": 52,
-            "point": [
-              145,
-              408
-            ],
-            "bbox": [
-              111,
-              324,
-              69,
-              168
-            ],
-            "bbox_xyxy": [
-              111,
-              324,
-              180,
-              492
-            ],
-            "confidence": 0.465
-          },
-          {
-            "id": 24,
-            "point": [
-              1902,
-              319
-            ],
-            "bbox": [
-              1887,
-              204,
-              30,
-              231
-            ],
-            "bbox_xyxy": [
-              1887,
-              204,
-              1917,
-              435
-            ],
-            "confidence": 0.364
-          },
-          {
-            "id": 18,
-            "point": [
-              498,
-              277
-            ],
-            "bbox": [
-              477,
-              213,
-              42,
-              129
-            ],
-            "bbox_xyxy": [
-              477,
-              213,
-              519,
-              342
-            ],
-            "confidence": 0.277
-          },
-          {
-            "id": 1,
-            "point": [
-              1351,
-              157
-            ],
-            "bbox": [
-              1335,
-              126,
+              1551,
+              309,
               33,
-              63
-            ],
-            "bbox_xyxy": [
-              1335,
-              126,
-              1368,
-              189
-            ],
-            "confidence": 0.276
-          },
-          {
-            "id": 0,
-            "point": [
-              1042,
-              153
-            ],
-            "bbox": [
-              1029,
-              111,
-              27,
               84
             ],
             "bbox_xyxy": [
-              1029,
-              111,
-              1056,
-              195
+              1551,
+              309,
+              1584,
+              393
             ],
-            "confidence": 0.264
+            "confidence": 0.395
           },
           {
-            "id": 3,
+            "id": 8,
             "point": [
-              1192,
-              168
-            ],
-            "bbox": [
-              1179,
-              129,
               27,
-              78
-            ],
-            "bbox_xyxy": [
-              1179,
-              129,
-              1206,
-              207
-            ],
-            "confidence": 0.224
-          },
-          {
-            "id": 62,
-            "point": [
-              25,
-              601
+              603
             ],
             "bbox": [
               0,
-              480,
-              51,
-              243
+              354,
+              54,
+              498
             ],
             "bbox_xyxy": [
               0,
-              480,
-              51,
-              723
+              354,
+              54,
+              852
             ],
-            "confidence": 0.218
-          },
-          {
-            "id": 9,
-            "point": [
-              495,
-              252
-            ],
-            "bbox": [
-              477,
-              216,
-              36,
-              72
-            ],
-            "bbox_xyxy": [
-              477,
-              216,
-              513,
-              288
-            ],
-            "confidence": 0.184
+            "confidence": 0.3
           }
         ],
         "dense_detections": [],
-        "avg_inter_head_distance": 262.56,
+        "avg_inter_head_distance": 1055.28,
         "hotspot_regions": []
       },
+      "trend_direction": "DISPERSING",
+      "growth_rate_per_min": -0.6,
+      "forecaster_latency_ms": 0.08,
+      "updated_at": "2026-08-27T04:16:53Z",
       "density_mode": false,
       "sparse_ratio": 1,
       "dense_ratio": 0,
       "overlap_ratio": 0,
-      "trend_direction": "ACCUMULATING",
-      "growth_rate_per_min": 0.67,
-      "forecaster_latency_ms": 0.165,
-      "camera_id": "15af0b6a-c5d7-4b3d-825b-f4591776400b",
+      "camera_id": "6e166aa4-7959-4065-9a30-fadcc98d6f44",
       "userId": "e57605de-ba09-43a5-90c1-ee2d135be57c",
-      "zoneName": "F1"
+      "zoneName": "Z1"
     },
-    "webrtcUrl": "http://localhost:8889/cam_15af0b6a-c5d7-4b3d-825b-f4591776400b/whep",
-    "lastStartedAt": "2026-08-27T02:17:49.685Z",
-    "lastFrameAt": "2026-08-27T02:19:31.769Z"
+    "webrtcUrl": "http://localhost:8889/cam_6e166aa4-7959-4065-9a30-fadcc98d6f44/whep",
+    "lastStartedAt": "2026-08-27T04:14:24.288Z",
+    "lastFrameAt": "2026-08-27T04:16:53.870Z"
   }
 ]

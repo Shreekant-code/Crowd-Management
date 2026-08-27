@@ -112,7 +112,7 @@ class PersonTracker:
             return []
 
         ids = np.asarray(tracker_ids)
-        items: List[Dict[str, int]] = []
+        items: List[Dict[str, Any]] = []
         for box, tracker_id in zip(xyxy, ids):
             if tracker_id is None:
                 continue
@@ -122,13 +122,20 @@ class PersonTracker:
             y1 = max(y1, 0)
             x2 = max(x2, x1)
             y2 = max(y2, y1)
+            bw = max(x2 - x1, 0)
+            bh = max(y2 - y1, 0)
+            cx = int((x1 + x2) / 2)
+            cy = int((y1 + y2) / 2)
+
             items.append(
                 {
                     "id": int(tracker_id),
-                    "bbox": [x1, y1, max(x2 - x1, 0), max(y2 - y1, 0)],
+                    "bbox": [x1, y1, bw, bh],
+                    "bbox_norm": [round(x1 / 1920.0, 4), round(y1 / 1080.0, 4), round(bw / 1920.0, 4), round(bh / 1080.0, 4)],
                     "bbox_xyxy": [x1, y1, x2, y2],
-                    "center": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
-                    "point": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
+                    "center": [cx, cy],
+                    "point": [cx, cy],
+                    "point_norm": [round(cx / 1920.0, 4), round(cy / 1080.0, 4)],
                     "confidence": 0.85,
                 }
             )
@@ -136,7 +143,7 @@ class PersonTracker:
         items.sort(key=lambda item: item["id"])
         return items
 
-    def _update_fallback(self, detections: List[Dict[str, Any]]) -> List[Dict[str, int]]:
+    def _update_fallback(self, detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not detections:
             for track in self.tracks:
                 track["misses"] = int(track.get("misses", 0)) + 1
@@ -188,7 +195,7 @@ class PersonTracker:
 
         self.tracks = [track for track in self.tracks if int(track.get("misses", 0)) <= 12]
 
-        items: List[Dict[str, int]] = []
+        items: List[Dict[str, Any]] = []
         for track in self.tracks:
             if int(track.get("misses", 0)) > 0:
                 continue
@@ -197,13 +204,20 @@ class PersonTracker:
             y1 = max(y1, 0)
             x2 = max(x2, x1)
             y2 = max(y2, y1)
+            bw = max(x2 - x1, 0)
+            bh = max(y2 - y1, 0)
+            cx = int((x1 + x2) / 2)
+            cy = int((y1 + y2) / 2)
+
             items.append(
                 {
                     "id": int(track["track_id"]),
-                    "bbox": [x1, y1, max(x2 - x1, 0), max(y2 - y1, 0)],
+                    "bbox": [x1, y1, bw, bh],
+                    "bbox_norm": [round(x1 / 1920.0, 4), round(y1 / 1080.0, 4), round(bw / 1920.0, 4), round(bh / 1080.0, 4)],
                     "bbox_xyxy": [x1, y1, x2, y2],
-                    "center": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
-                    "point": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
+                    "center": [cx, cy],
+                    "point": [cx, cy],
+                    "point_norm": [round(cx / 1920.0, 4), round(cy / 1080.0, 4)],
                     "confidence": float(track.get("confidence", 0.85)),
                 }
             )

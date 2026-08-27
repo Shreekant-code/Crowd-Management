@@ -1,47 +1,48 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { LoaderCircle, VideoOff, AlertCircle } from "lucide-react";
+import { LoaderCircle, VideoOff, AlertCircle, Scan, Disc, Layers } from "lucide-react";
 import { useStreamManager, STREAM_STATES, STREAM_MODES } from "@/lib/stream-manager";
 import { WhepClient } from "@/lib/whep-client";
 
 function getRiskAccent(risk) {
   if (risk === "Critical") {
     return {
-      stroke: "rgba(248, 113, 113, 0.98)",
-      fill: "rgba(127, 29, 29, 0.18)",
-      chip: "rgba(127, 29, 29, 0.85)",
+      stroke: "rgba(248, 113, 113, 0.95)",
+      fill: "rgba(239, 68, 68, 0.12)",
       line: "rgba(248, 113, 113, 0.85)",
     };
   }
 
   if (risk === "High") {
     return {
-      stroke: "rgba(251, 146, 60, 0.98)",
-      fill: "rgba(154, 52, 18, 0.16)",
-      chip: "rgba(154, 52, 18, 0.82)",
+      stroke: "rgba(251, 146, 60, 0.95)",
+      fill: "rgba(249, 115, 22, 0.10)",
       line: "rgba(251, 146, 60, 0.82)",
     };
   }
 
   if (risk === "Medium") {
     return {
-      stroke: "rgba(250, 204, 21, 0.98)",
-      fill: "rgba(133, 77, 14, 0.15)",
-      chip: "rgba(133, 77, 14, 0.80)",
+      stroke: "rgba(250, 204, 21, 0.95)",
+      fill: "rgba(234, 179, 8, 0.10)",
       line: "rgba(250, 204, 21, 0.80)",
     };
   }
 
   return {
-    stroke: "rgba(45, 212, 191, 0.98)",
-    fill: "rgba(15, 118, 110, 0.16)",
-    chip: "rgba(15, 118, 110, 0.80)",
+    stroke: "rgba(45, 212, 191, 0.95)",
+    fill: "rgba(20, 184, 166, 0.10)",
     line: "rgba(45, 212, 191, 0.78)",
   };
 }
 
 function getDetectionBox(detection = {}) {
+  if (Array.isArray(detection.bbox_norm) && detection.bbox_norm.length >= 4) {
+    const [x = 0, y = 0, w = 0, h = 0] = detection.bbox_norm;
+    return [x, y, w, h];
+  }
+
   if (Array.isArray(detection.bbox) && detection.bbox.length >= 4) {
     const [x = 0, y = 0, w = 0, h = 0] = detection.bbox;
     return [x, y, w, h];
@@ -60,13 +61,39 @@ function getDetectionBox(detection = {}) {
   return [0, 0, 0, 0];
 }
 
+function getDetectionPoint(detection = {}) {
+  if (Array.isArray(detection.point_norm) && detection.point_norm.length >= 2) {
+    return [detection.point_norm[0], detection.point_norm[1]];
+  }
+
+  if (Array.isArray(detection.point) && detection.point.length >= 2) {
+    return [detection.point[0], detection.point[1]];
+  }
+
+  if (Array.isArray(detection.bbox_norm) && detection.bbox_norm.length >= 4) {
+    return [
+      detection.bbox_norm[0] + detection.bbox_norm[2] / 2,
+      detection.bbox_norm[1] + detection.bbox_norm[3] / 2,
+    ];
+  }
+
+  if (Array.isArray(detection.bbox) && detection.bbox.length >= 4) {
+    return [
+      detection.bbox[0] + detection.bbox[2] / 2,
+      detection.bbox[1] + detection.bbox[3] / 2,
+    ];
+  }
+
+  return [0, 0];
+}
+
 export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
   const videoRef = useRef(null);
   const imageRef = useRef(null);
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const boundsRef = useRef({ width: 960, height: 540, videoWidth: 960, videoHeight: 540 });
-  const trackStatesRef = useRef(new Map());
+  const [overlayMode, setOverlayMode] = useState("both"); // "both" | "boxes" | "points" | "off"
 
   const {
     status: streamStatus,
@@ -82,39 +109,8 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
   const metricsRef = useRef(liveMetrics);
   const isRunning = camera?.status === "running";
 
-  // Ingest telemetry into Track-ID-keyed LERP state machine (2 FPS -> 60 FPS)
   useEffect(() => {
     metricsRef.current = liveMetrics;
-    const detections = Array.isArray(liveMetrics?.detections) ? liveMetrics.detections : [];
-    const now = performance.now();
-
-    detections.forEach((det, idx) => {
-      const trackId = det.id ?? det.track_id ?? (det.trackId != null ? det.trackId : idx);
-      if (trackId == null) return;
-
-      const [x, y, w, h] = getDetectionBox(det);
-      const existing = trackStatesRef.current.get(trackId);
-
-      if (existing) {
-        existing.target = [x, y, w, h];
-        existing.lastSeen = now;
-        existing.confidence = det.confidence ?? existing.confidence;
-      } else {
-        trackStatesRef.current.set(trackId, {
-          current: [x, y, w, h], // Snap immediately on first sighting
-          target: [x, y, w, h],
-          lastSeen: now,
-          confidence: det.confidence ?? 0.85,
-        });
-      }
-    });
-
-    // Prune stale tracks older than 1200ms
-    for (const [trackId, state] of trackStatesRef.current.entries()) {
-      if (now - state.lastSeen > 1200) {
-        trackStatesRef.current.delete(trackId);
-      }
-    }
   }, [liveMetrics]);
 
   // Layout bounds tracking via ResizeObserver
@@ -130,8 +126,8 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
       const vh = video?.videoHeight || img?.naturalHeight || 540;
 
       boundsRef.current = {
-        width: Math.max(Math.round(rect.width), 1),
-        height: Math.max(Math.round(rect.height), 1),
+        width: Math.max(Math.round(rect.width), 320),
+        height: Math.max(Math.round(rect.height), 180),
         videoWidth: vw,
         videoHeight: vh,
       };
@@ -144,52 +140,29 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
     return () => observer.disconnect();
   }, []);
 
-  // WebRTC WHEP connection lifecycle with React 19 Strict Mode protection
+  // WebRTC WHEP connection lifecycle
   useEffect(() => {
-    if (!isRunning || !whepUrl || streamMode !== STREAM_MODES.WEBRTC) {
-      if (streamMode !== STREAM_MODES.PREVIEW && streamMode !== STREAM_MODES.AI) {
-        setStreamStatus(STREAM_STATES.IDLE);
-      }
+    const video = videoRef.current;
+    if (!video || !isRunning || !whepUrl || streamMode !== STREAM_MODES.WEBRTC) {
       return undefined;
     }
 
-    const video = videoRef.current;
-    if (!video) return undefined;
-
     let isSubscribed = true;
-
     const client = new WhepClient({
       url: whepUrl,
       onStateChange: (newState) => {
         if (!isSubscribed) return;
         if (newState === "live") {
           setStreamStatus(STREAM_STATES.LIVE);
-        } else if (newState === "connecting") {
-          setStreamStatus(STREAM_STATES.CONNECTING);
-        } else if (newState === "reconnecting") {
-          setStreamStatus(STREAM_STATES.RECONNECTING);
         } else if (newState === "failed") {
-          // If WebRTC fails while camera is running, fallback to direct preview
-          if (isSubscribed && isRunning) {
-            console.warn(`[CameraFeed] WebRTC failed for camera ${camera.id}, switching to Preview mode.`);
-            setStreamMode(STREAM_MODES.PREVIEW);
-            setStreamStatus(STREAM_STATES.FALLBACK_PREVIEW);
-          } else {
-            setStreamStatus(STREAM_STATES.IDLE);
-          }
-        } else {
-          setStreamStatus(STREAM_STATES.IDLE);
+          setStreamMode(STREAM_MODES.PREVIEW);
+          setStreamStatus(STREAM_STATES.FALLBACK_PREVIEW);
         }
-      },
-      onError: (err) => {
-        if (!isSubscribed || !isRunning) return;
-        console.warn(`[CameraFeed] WHEP connection warning for camera ${camera.id}:`, err?.message);
       },
     });
 
     client.connect(video).catch((err) => {
       if (isSubscribed && isRunning) {
-        console.warn(`[CameraFeed] WebRTC failed to connect: ${err?.message}`);
         setStreamMode(STREAM_MODES.PREVIEW);
         setStreamStatus(STREAM_STATES.FALLBACK_PREVIEW);
       }
@@ -198,18 +171,15 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
     return () => {
       isSubscribed = false;
       client.disconnect();
-      if (video) {
-        video.srcObject = null;
-      }
     };
   }, [camera.id, isRunning, whepUrl, streamMode, setStreamStatus, setStreamMode]);
 
   const isLive = streamStatus === STREAM_STATES.LIVE || streamStatus === STREAM_STATES.FALLBACK_PREVIEW;
 
-  // 60 FPS HTML5 Canvas Overlay rendering loop with Track-ID LERP
+  // Clean Real-Time Per-Frame Canvas Overlay (Approach 3: Zero-lag Instant Identification)
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !isLive) {
+    if (!canvas || !isLive || overlayMode === "off") {
       return undefined;
     }
 
@@ -219,10 +189,8 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
     }
 
     let animationFrameId = 0;
-    const ALPHA = 0.22; // LERP smoothing factor
 
     const drawOverlay = () => {
-      const now = performance.now();
       const video = videoRef.current;
       const img = imageRef.current;
       const { width, height } = boundsRef.current;
@@ -241,15 +209,14 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
       context.clearRect(0, 0, width, height);
 
       const metrics = metricsRef.current || {};
+      const detections = Array.isArray(metrics.detections) ? metrics.detections : [];
 
-      // Calculate letterbox/pillarbox geometry for pixel-perfect alignment
       const containerRatio = width / height;
       const videoRatio = videoWidth / videoHeight;
 
       let renderWidth, renderHeight, offsetX, offsetY;
 
       if (compact) {
-        // object-fit: cover
         if (containerRatio > videoRatio) {
           renderWidth = width;
           renderHeight = width / videoRatio;
@@ -262,7 +229,6 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
           offsetY = 0;
         }
       } else {
-        // object-fit: contain
         if (containerRatio > videoRatio) {
           renderHeight = height;
           renderWidth = videoRatio * height;
@@ -276,124 +242,98 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
         }
       }
 
-      // Adaptive coordinate projection mapping (handles normalized 0..1, 640x640 model space, and 1080p canvas)
       function toScreen(x, y, w, h) {
         const isNorm = x <= 1.0 && y <= 1.0 && w <= 1.0 && h <= 1.0 && (w > 0 || h > 0);
-        
         let normX, normY, normW, normH;
+
         if (isNorm) {
           normX = Math.max(0, Math.min(x, 1.0));
           normY = Math.max(0, Math.min(y, 1.0));
-          normW = Math.max(w, 0.01);
-          normH = Math.max(h, 0.01);
+          normW = Math.max(w, 0.005);
+          normH = Math.max(h, 0.005);
         } else {
-          // If max coordinate <= 640, detections are in 640x640 model coordinate space
-          const coordBaseW = (x <= 640 && y <= 640 && w <= 640 && h <= 640) ? 640.0 : 1920.0;
-          const coordBaseH = coordBaseW === 640.0 ? 640.0 : 1080.0;
+          const coordBaseW = videoWidth > 0 ? videoWidth : ((x <= 640 && y <= 640 && w <= 640 && h <= 640) ? 640.0 : 1920.0);
+          const coordBaseH = videoHeight > 0 ? videoHeight : (coordBaseW === 640.0 ? 640.0 : 1080.0);
           normX = Math.max(0, Math.min(x / coordBaseW, 1.0));
           normY = Math.max(0, Math.min(y / coordBaseH, 1.0));
-          normW = Math.max(w / coordBaseW, 0.015);
-          normH = Math.max(h / coordBaseH, 0.015);
+          normW = Math.max(w / coordBaseW, 0.005);
+          normH = Math.max(h / coordBaseH, 0.005);
         }
 
         return {
           left: offsetX + normX * renderWidth,
           top: offsetY + normY * renderHeight,
-          boxWidth: Math.max(normW * renderWidth, 8),
-          boxHeight: Math.max(normH * renderHeight, 8),
+          boxWidth: Math.max(normW * renderWidth, 6),
+          boxHeight: Math.max(normH * renderHeight, 6),
         };
       }
 
-      // 1. Update LERP interpolation for all active tracks & prune stale
-      for (const [trackId, state] of trackStatesRef.current.entries()) {
-        if (now - state.lastSeen > 1200) {
-          trackStatesRef.current.delete(trackId);
-          continue;
+      function toScreenPoint(x, y) {
+        const isNorm = x <= 1.0 && y <= 1.0 && (x > 0 || y > 0);
+        let normX, normY;
+
+        if (isNorm) {
+          normX = Math.max(0, Math.min(x, 1.0));
+          normY = Math.max(0, Math.min(y, 1.0));
+        } else {
+          const coordBaseW = videoWidth > 0 ? videoWidth : (x <= 640 && y <= 640 ? 640.0 : 1920.0);
+          const coordBaseH = videoHeight > 0 ? videoHeight : (coordBaseW === 640.0 ? 640.0 : 1080.0);
+          normX = Math.max(0, Math.min(x / coordBaseW, 1.0));
+          normY = Math.max(0, Math.min(y / coordBaseH, 1.0));
         }
 
-        // LERP interpolation towards target coordinates
-        for (let i = 0; i < 4; i++) {
-          state.current[i] += (state.target[i] - state.current[i]) * ALPHA;
-        }
+        return {
+          x: offsetX + normX * renderWidth,
+          y: offsetY + normY * renderHeight,
+        };
       }
 
-      // 2. Collect render items (tracked states with LERP, or fallback to raw detections)
-      const renderItems = [];
-      if (trackStatesRef.current.size > 0) {
-        for (const [trackId, state] of trackStatesRef.current.entries()) {
-          const [x, y, w, h] = state.current;
-          const proj = toScreen(x, y, w, h);
-          renderItems.push({
-            trackId,
-            ...proj,
-          });
-        }
-      } else if (Array.isArray(metrics.detections) && metrics.detections.length > 0) {
-        metrics.detections.forEach((det, idx) => {
-          const [x, y, w, h] = getDetectionBox(det);
-          const proj = toScreen(x, y, w, h);
-          renderItems.push({
-            trackId: det.id ?? det.track_id ?? idx + 1,
-            ...proj,
-          });
+      const showBoxes = overlayMode === "both" || overlayMode === "boxes";
+      const showPoints = overlayMode === "both" || overlayMode === "points";
+      const accent = getRiskAccent(metrics.risk || "Low");
+
+      if (showBoxes && detections.length > 0) {
+        context.lineWidth = 1.5;
+        context.strokeStyle = accent.stroke;
+        context.fillStyle = accent.fill;
+
+        detections.forEach((det) => {
+          const [bx, by, bw, bh] = getDetectionBox(det);
+          const proj = toScreen(bx, by, bw, bh);
+
+          context.strokeRect(proj.left, proj.top, proj.boxWidth, proj.boxHeight);
+          context.fillRect(proj.left, proj.top, proj.boxWidth, proj.boxHeight);
         });
       }
 
-      // 3. Draw P2PNet Head Center Focal Dots & Sheer Radial Auras
-      renderItems.forEach((item) => {
-        const centerX = item.left + item.boxWidth / 2;
-        const centerY = item.top + item.boxHeight / 2;
+      if (showPoints && detections.length > 0) {
+        detections.forEach((det) => {
+          const [px, py] = getDetectionPoint(det);
+          const pt = toScreenPoint(px, py);
 
-        // Circular Radial Aura
-        const gradient = context.createRadialGradient(
-          centerX,
-          centerY,
-          2,
-          centerX,
-          centerY,
-          16
-        );
-        gradient.addColorStop(0, "rgba(249, 115, 22, 0.45)"); // Sheer Orange-Red Core
-        gradient.addColorStop(0.5, "rgba(249, 115, 22, 0.15)"); // Mid-tone
-        gradient.addColorStop(1, "rgba(249, 115, 22, 0.00)");  // Transparent Falloff
+          const gradient = context.createRadialGradient(pt.x, pt.y, 2, pt.x, pt.y, 14);
+          gradient.addColorStop(0, "rgba(249, 115, 22, 0.55)");
+          gradient.addColorStop(0.5, "rgba(249, 115, 22, 0.15)");
+          gradient.addColorStop(1, "rgba(249, 115, 22, 0.00)");
 
-        context.beginPath();
-        context.arc(centerX, centerY, 16, 0, 2 * Math.PI);
-        context.fillStyle = gradient;
-        context.fill();
+          context.beginPath();
+          context.arc(pt.x, pt.y, 14, 0, 2 * Math.PI);
+          context.fillStyle = gradient;
+          context.fill();
 
-        // High-Visibility Head Center Dot (P2PNet Point)
-        context.beginPath();
-        context.arc(centerX, centerY, 4, 0, 2 * Math.PI);
-        context.fillStyle = "#F97316";
-        context.fill();
-      });
-
-      // 4. Draw Smooth Track-ID LERP Bounding Boxes and Chips
-      const accent = getRiskAccent(metrics.risk || "Low");
-      context.lineWidth = 1.5;
-      context.font = "12px sans-serif";
-
-      renderItems.forEach((item) => {
-        context.strokeStyle = accent.stroke;
-        context.fillStyle = accent.fill;
-        context.strokeRect(item.left, item.top, item.boxWidth, item.boxHeight);
-        context.fillRect(item.left, item.top, item.boxWidth, item.boxHeight);
-
-        const label = `ID: ${item.trackId}`;
-        const textWidth = context.measureText(label).width;
-        context.fillStyle = accent.chip;
-        context.fillRect(item.left, Math.max(item.top - 18, 0), textWidth + 10, 18);
-        context.fillStyle = "#f8fafc";
-        context.fillText(label, item.left + 5, Math.max(item.top - 5, 12));
-      });
+          context.beginPath();
+          context.arc(pt.x, pt.y, 3.5, 0, 2 * Math.PI);
+          context.fillStyle = "#F97316";
+          context.fill();
+        });
+      }
 
       animationFrameId = window.requestAnimationFrame(drawOverlay);
     };
 
     animationFrameId = window.requestAnimationFrame(drawOverlay);
     return () => window.cancelAnimationFrame(animationFrameId);
-  }, [isLive, compact]);
+  }, [isLive, compact, overlayMode]);
 
   return (
     <div className="mt-4 space-y-3">
@@ -410,13 +350,6 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
                 playsInline
                 muted
                 className={`h-full w-full bg-slate-950 ${compact ? "object-cover" : "object-contain"}`}
-                onLoadedMetadata={() => {
-                  const video = videoRef.current;
-                  if (video) {
-                    boundsRef.current.videoWidth = video.videoWidth || 960;
-                    boundsRef.current.videoHeight = video.videoHeight || 540;
-                  }
-                }}
               />
             ) : (
               <img
@@ -426,16 +359,11 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
                 className={`h-full w-full bg-slate-950 ${compact ? "object-cover" : "object-contain"}`}
                 onLoad={() => {
                   setStreamStatus(STREAM_STATES.FALLBACK_PREVIEW);
-                  const img = imageRef.current;
-                  if (img) {
-                    boundsRef.current.videoWidth = img.naturalWidth || 960;
-                    boundsRef.current.videoHeight = img.naturalHeight || 540;
-                  }
                 }}
               />
             )}
 
-            {isLive ? (
+            {isLive && overlayMode !== "off" ? (
               <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
             ) : null}
 
@@ -448,17 +376,84 @@ export function CameraFeed({ camera, onLiveMetricsChange, compact = false }) {
                   {sourceBadge.label}
                 </div>
                 <div className="pointer-events-none absolute left-3 top-11 z-10 rounded-full bg-black/65 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-white">
-                  Count {Number(liveMetrics?.current_count ?? liveMetrics?.count ?? liveMetrics?.people_count ?? 0)}
+                  Count {Number(liveMetrics?.current_count ?? liveMetrics?.count ?? liveMetrics?.people_count ?? liveMetrics?.sparse_count ?? liveMetrics?.raw_count ?? 0)}
                   {liveMetrics?.prediction_10min_count != null ? (
                     <span className="ml-1.5 text-white/70">
                       (10m: {liveMetrics.prediction_10min_count})
                     </span>
                   ) : null}
                 </div>
+
+                <div className="absolute bottom-3 right-3 z-20 flex items-center gap-1 rounded-xl bg-slate-950/80 p-1 border border-slate-800/80 backdrop-blur-md">
+                  <button
+                    type="button"
+                    onClick={() => setOverlayMode("both")}
+                    className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-bold transition ${
+                      overlayMode === "both"
+                        ? "bg-teal-500 text-slate-950 shadow-sm"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                    title="Display both boundary boxes and head focal dots"
+                  >
+                    <Layers className="h-3 w-3" />
+                    Combined
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOverlayMode("boxes")}
+                    className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-bold transition ${
+                      overlayMode === "boxes"
+                        ? "bg-teal-500 text-slate-950 shadow-sm"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                    title="Display pixel-accurate boundary boxes only"
+                  >
+                    <Scan className="h-3 w-3" />
+                    Boxes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOverlayMode("points")}
+                    className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-bold transition ${
+                      overlayMode === "points"
+                        ? "bg-teal-500 text-slate-950 shadow-sm"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                    title="Display head center focal dots only"
+                  >
+                    <Disc className="h-3 w-3" />
+                    Dots
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOverlayMode("off")}
+                    className={`rounded-lg px-2 py-1 text-[10px] font-bold transition ${
+                      overlayMode === "off"
+                        ? "bg-slate-700 text-white"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                    title="Hide AI overlay"
+                  >
+                    Off
+                  </button>
+                </div>
               </>
             ) : null}
 
-            {streamStatus === STREAM_STATES.CONNECTING || streamStatus === STREAM_STATES.RECONNECTING ? (
+            {streamStatus === STREAM_STATES.FAILED || sourceBadge.label === "Unresolved" ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-slate-950/85 p-4">
+                <div className="text-center text-white max-w-xs">
+                  <AlertCircle className="mx-auto h-8 w-8 text-rose-400 mb-2" />
+                  <p className="text-sm font-bold text-white">Live Stream Unavailable</p>
+                  <p className="mt-1 text-xs text-slate-300">
+                    {camera?.metrics?.stream_resolution_error || "The remote broadcast has ended or is temporarily unreachable."}
+                  </p>
+                  <p className="mt-2 text-[10px] uppercase tracking-wider text-rose-400/80 font-bold">
+                    {sourceBadge.label}
+                  </p>
+                </div>
+              </div>
+            ) : streamStatus === STREAM_STATES.CONNECTING || streamStatus === STREAM_STATES.RECONNECTING ? (
               <div className="absolute inset-0 flex items-center justify-center bg-slate-950/68">
                 <div className="text-center text-white">
                   <LoaderCircle className="mx-auto h-7 w-7 animate-spin text-teal-300" />

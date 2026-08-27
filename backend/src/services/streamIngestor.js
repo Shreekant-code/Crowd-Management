@@ -2,6 +2,8 @@ import path from "node:path";
 import { exec, spawn } from "node:child_process";
 import fs from "node:fs";
 import ffmpegStatic from "ffmpeg-static";
+import cameraRepository from "../data/cameraRepository.js";
+import { emitCamera } from "./socketHub.js";
 
 const activeIngestions = new Map();
 const YOUTUBE_USER_AGENT =
@@ -140,6 +142,28 @@ export function startIngest(cameraId, sourceUrl) {
 }
 
 /**
+ * Updates camera repository and emits socket update
+ */
+function updateCameraIngestStatus(cameraId, status, errorMsg = null) {
+  try {
+    const camera = cameraRepository.getById(cameraId);
+    if (!camera) return;
+    camera.metrics = {
+      ...(camera.metrics || {}),
+      stream_resolution_status: status,
+      stream_resolution_error: errorMsg,
+      processing_status: status === "youtube_resolved" ? "streaming" : "error",
+      camera_health: status === "youtube_resolved" ? "good" : "unstable",
+      updatedAt: new Date().toISOString(),
+    };
+    cameraRepository.save(camera);
+    emitCamera(camera.userId, camera);
+  } catch (err) {
+    console.warn(`[StreamIngestor] Could not update camera status for ${cameraId}: ${err.message}`);
+  }
+}
+
+/**
  * Runs the yt-dlp -> FFmpeg pipe cycle
  */
 function runIngestCycle(entry) {
@@ -179,6 +203,7 @@ function runIngestCycle(entry) {
 
   ytProc.on("error", (err) => {
     console.error(`[StreamIngestor] yt-dlp process error for cam_${entry.cameraId}: ${err.message}`);
+    updateCameraIngestStatus(entry.cameraId, "unresolved", err.message);
     scheduleReconnect(entry);
   });
 
@@ -187,9 +212,11 @@ function runIngestCycle(entry) {
     if (entry.stopped) return;
 
     if (code !== 0) {
+      const firstErrorLine = (stderrBuffer.trim() || "").split(/\r?\n/)[0] || `yt-dlp exited with code ${code}`;
       console.warn(
         `[StreamIngestor] yt-dlp exited with code ${code} for cam_${entry.cameraId}: ${stderrBuffer.trim()}`
       );
+      updateCameraIngestStatus(entry.cameraId, "unresolved", firstErrorLine);
       scheduleReconnect(entry);
       return;
     }
@@ -201,6 +228,7 @@ function runIngestCycle(entry) {
 
     if (!streamUrl) {
       console.warn(`[StreamIngestor] yt-dlp produced no valid stream URL for cam_${entry.cameraId}`);
+      updateCameraIngestStatus(entry.cameraId, "unresolved", "No valid stream URL extracted");
       scheduleReconnect(entry);
       return;
     }
@@ -209,6 +237,7 @@ function runIngestCycle(entry) {
       `[StreamIngestor] Live stream URL extracted for cam_${entry.cameraId}. Launching FFmpeg RTSP publisher...`
     );
 
+    updateCameraIngestStatus(entry.cameraId, "youtube_resolved", null);
     launchFfmpegPublisher(entry, streamUrl);
   });
 }

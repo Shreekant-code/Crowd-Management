@@ -72,7 +72,14 @@ export function VenueMap({ cameras = [], global = {}, onInspectCamera }) {
   const cameraMetricsMap = useMemo(() => {
     const map = {};
     cameras.forEach((cam) => {
-      const count = Number(cam.metrics?.current_count ?? cam.metrics?.count ?? cam.metrics?.people_count ?? 0);
+      const count = Number(
+        cam.metrics?.current_count ??
+        cam.metrics?.count ??
+        cam.metrics?.people_count ??
+        cam.metrics?.sparse_count ??
+        cam.metrics?.raw_count ??
+        0
+      );
       map[cam.id] = {
         current_count: count,
         risk: cam.metrics?.risk || "Low",

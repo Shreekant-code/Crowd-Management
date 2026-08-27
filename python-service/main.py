@@ -604,10 +604,12 @@ async def camera_live(
 def get_stream_latest(camera_id: str) -> Dict[str, Any]:
     stats = batched_stream_manager.get_camera_stats(camera_id)
     if stats:
+        timestamp = stats.get("updatedAt") or stats.get("updated_at") or utc_now()
         return {
             "camera_id": camera_id,
             "status": "running",
-            "updated_at": stats.get("updatedAt"),
+            "updated_at": timestamp,
+            "updatedAt": timestamp,
             "result": stats,
         }
 

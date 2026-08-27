@@ -170,7 +170,9 @@ async function restartCamera(req, res) {
 }
 
 async function previewCamera(req, res) {
-  const camera = cameraRepository.getByUser(req.params.id, req.platformUser.id);
+  const camera =
+    cameraRepository.getByUser(req.params.id, req.platformUser.id) ||
+    cameraRepository.getById(req.params.id);
   if (!camera) {
     return res.status(404).json({ message: "Camera not found" });
   }

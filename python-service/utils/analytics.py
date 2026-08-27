@@ -430,10 +430,24 @@ class AnalyticsEngine:
             "hotspot_ratio": hotspot_ratio,
         }
 
+        final_detections = tracks if tracks else detections
+        head_points = []
+        head_points_norm = []
+        for det in final_detections:
+            pt = det.get("point") or det.get("center")
+            if pt and len(pt) >= 2:
+                head_points.append([int(pt[0]), int(pt[1])])
+                if "point_norm" in det:
+                    head_points_norm.append(det["point_norm"])
+                else:
+                    head_points_norm.append([round(float(pt[0]) / 1920.0, 4), round(float(pt[1]) / 1080.0, 4)])
+
+        now_iso = utc_now()
         return {
             "people_count": effective_count,
             "current_count": effective_count,
             "count": effective_count,
+            "head_count": len(head_points) if head_points else effective_count,
             "sparse_count": sparse_cnt,
             "dense_count": dense_cnt,
             "dominant_regime": dom_regime,
@@ -445,14 +459,17 @@ class AnalyticsEngine:
             "density_count": effective_count if (density_mode or dom_regime == "DENSE") else 0,
             "overlap_ratio": overlap_ratio,
             "active_track_ids": [t.get("id") for t in tracks if "id" in t],
-            "detections": tracks if tracks else detections,
+            "head_points": head_points,
+            "head_points_norm": head_points_norm,
+            "detections": final_detections,
             "heatmap_points": [{"x": x, "y": y} for x, y in list(self.heatmap_history)],
             "zone_counts": zone_counts,
             "line_crossing": dict(self.line_crossing),
             "risk": risk,
             "crowd_features": crowd_features,
             "risk_score": round(min(effective_count / 30.0, 1.0), 4),
-            "updatedAt": utc_now(),
+            "updatedAt": now_iso,
+            "updated_at": now_iso,
         }
 
     def stale_result(self, previous_result: Dict[str, Any] | None = None) -> Dict[str, Any]:

@@ -98,7 +98,16 @@ export function SummaryCards({ summary = {}, global = {} }) {
 }
 
 function getLiveCount(metrics = {}) {
-  const count = metrics.current_count ?? metrics.count ?? metrics.people_count ?? 0;
+  const count =
+    metrics?.current_count ??
+    metrics?.count ??
+    metrics?.people_count ??
+    metrics?.sparse_count ??
+    metrics?.raw_count ??
+    metrics?.yolo_count ??
+    metrics?.final_count ??
+    metrics?.smoothed_count ??
+    0;
   return Number(count) || 0;
 }
 

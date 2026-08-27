@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import cameraRepository from "../data/cameraRepository.js";
 import alertRepository from "../data/alertRepository.js";
-import { aiStreamPollIntervalMs } from "../config/env.js";
+import { aiStreamPollIntervalMs, enableMediaMtx } from "../config/env.js";
 import { mockPredict } from "../utils/mockPredict.js";
 import { resolveSourceInput } from "../utils/sourceResolver.js";
 import { emitAlert, emitCamera, emitDashboard, emitGlobal } from "./socketHub.js";
@@ -323,13 +323,26 @@ class CameraWorkerManager {
       worker.lastFrameSignature = frameSignature;
       worker.consecutiveFailures = 0;
 
+      // If camera already has newer telemetry from direct 2 FPS batch push, do not overwrite with stale polling
+      const existingUpdatedAt = camera.metrics?.updatedAt || camera.lastFrameAt || null;
+      const predUpdatedAt = prediction.updatedAt || prediction.updated_at || null;
+      if (existingUpdatedAt && predUpdatedAt && new Date(predUpdatedAt).getTime() < new Date(existingUpdatedAt).getTime() - 1000) {
+        return;
+      }
+
       const predCount = getLiveCount(prediction);
       const isTemporaryStatus =
         ["warming_up", "connecting", "mock_fallback"].includes(prediction.processing_status) ||
         Boolean(prediction.fallback_reason);
-      const effectiveCount = isTemporaryStatus && predCount === 0 && (camera.metrics?.current_count ?? 0) > 0
+      const effectiveCount = (isTemporaryStatus || predCount === 0) && (camera.metrics?.current_count ?? 0) > 0
         ? (camera.metrics?.current_count ?? camera.metrics?.count ?? 0)
         : predCount;
+
+      const nowIso = prediction.updatedAt || prediction.updated_at || new Date().toISOString();
+      const sparseCount = Number(prediction.sparse_count ?? camera.metrics?.sparse_count ?? effectiveCount);
+      const denseCount = Number(prediction.dense_count ?? camera.metrics?.dense_count ?? 0);
+      const dominantRegime = prediction.dominant_regime || camera.metrics?.dominant_regime || (denseCount > 0 ? "DENSE" : "SPARSE");
+      const pred10m = Number(prediction.prediction_10min_count ?? camera.metrics?.prediction_10min_count ?? effectiveCount);
 
       camera.status = "running";
       camera.metrics = {
@@ -338,6 +351,12 @@ class CameraWorkerManager {
         count: effectiveCount,
         current_count: effectiveCount,
         people_count: effectiveCount,
+        sparse_count: sparseCount,
+        dense_count: denseCount,
+        dominant_regime: dominantRegime,
+        prediction_10min_count: pred10m,
+        prediction_10min_risk: prediction.prediction_10min_risk || camera.metrics?.prediction_10min_risk || (pred10m > 30 ? "HIGH" : pred10m > 15 ? "MEDIUM" : "LOW"),
+        prediction_10min_label: prediction.prediction_10min_label || camera.metrics?.prediction_10min_label || `Prediction (10 min): ${pred10m > 30 ? "HIGH" : pred10m > 15 ? "MEDIUM" : "LOW"} RISK`,
         total_count: Number.isFinite(prediction.total_count) && prediction.total_count > 0
           ? Math.max(prediction.total_count, camera.metrics?.total_count ?? 0)
           : (camera.metrics?.total_count ?? 0),
@@ -347,9 +366,10 @@ class CameraWorkerManager {
         inference_ms: prediction.inference_ms ?? camera.metrics?.inference_ms ?? 0,
         camera_health: prediction.camera_health || camera.metrics?.camera_health || "good",
         processing_status: prediction.processing_status || "running",
-        updatedAt: prediction.updated_at || new Date().toISOString(),
+        updatedAt: nowIso,
+        updated_at: nowIso,
       };
-      camera.lastFrameAt = camera.metrics.updatedAt;
+      camera.lastFrameAt = nowIso;
       cameraRepository.save(camera);
       emitCamera(worker.userId, camera);
 
@@ -472,7 +492,7 @@ class CameraWorkerManager {
     const worker = this.createWorkerState(camera);
     this.workers.set(id, worker);
     void this.warmupCameraSource(camera, userId);
-    const aiStreamUrl = isIngestibleSource(camera.streamUrl)
+    const aiStreamUrl = enableMediaMtx
       ? getLocalRtspUrl(id)
       : camera.streamUrl;
 
@@ -661,19 +681,18 @@ class CameraWorkerManager {
 }
 
 function getLiveCount(metrics = {}) {
-  if (Number.isFinite(metrics?.current_count)) {
-    return metrics.current_count;
-  }
+  const count =
+    metrics?.current_count ??
+    metrics?.count ??
+    metrics?.people_count ??
+    metrics?.sparse_count ??
+    metrics?.raw_count ??
+    metrics?.yolo_count ??
+    metrics?.final_count ??
+    metrics?.smoothed_count ??
+    0;
 
-  if (Number.isFinite(metrics?.count)) {
-    return metrics.count;
-  }
-
-  if (Number.isFinite(metrics?.people_count)) {
-    return metrics.people_count;
-  }
-
-  return 0;
+  return Number(count) || 0;
 }
 
 export default new CameraWorkerManager();

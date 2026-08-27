@@ -103,11 +103,19 @@ function normalizePrediction(payload, fallback = buildMockPrediction()) {
     heatmap_points: Array.isArray(payload?.heatmap_points)
       ? payload.heatmap_points
       : fallback.heatmap_points,
-    sparse_count: payload?.sparse_count ?? (fallback.sparse_count ?? currentCount),
-    dense_count: payload?.dense_count ?? (fallback.dense_count ?? 0),
-    dominant_regime: payload?.dominant_regime || fallback.dominant_regime || "SPARSE",
+    sparse_count: Number.isFinite(payload?.sparse_count) ? payload.sparse_count : (payload?.sparseCount ?? currentCount),
+    dense_count: Number.isFinite(payload?.dense_count) ? payload.dense_count : (payload?.denseCount ?? 0),
+    dominant_regime: payload?.dominant_regime || payload?.dominantRegime || fallback.dominant_regime || "SPARSE",
     dense_clusters: Array.isArray(payload?.dense_clusters) ? payload.dense_clusters : [],
     regime_breakdown: payload?.regime_breakdown || null,
+    prediction_10min_count: Number.isFinite(payload?.prediction_10min_count)
+      ? payload.prediction_10min_count
+      : (payload?.predicted_crowd ?? currentCount),
+    prediction_10min_risk: payload?.prediction_10min_risk || (currentCount > 30 ? "HIGH" : currentCount > 15 ? "MEDIUM" : "LOW"),
+    prediction_10min_label: payload?.prediction_10min_label || `Prediction (10 min): ${currentCount > 30 ? "HIGH" : currentCount > 15 ? "MEDIUM" : "LOW"} RISK`,
+    trend_direction: payload?.trend_direction || "STABLE",
+    growth_rate_per_min: payload?.growth_rate_per_min ?? 0,
+    forecaster_latency_ms: payload?.forecaster_latency_ms ?? 0,
     alerts: Array.isArray(payload?.alerts) ? payload.alerts : fallback.alerts,
     zone_counts:
       payload?.zone_counts && typeof payload.zone_counts === "object"
@@ -122,6 +130,8 @@ function normalizePrediction(payload, fallback = buildMockPrediction()) {
         ? payload.crowd_features
         : fallback.crowd_features,
     risk: payload?.risk || deriveRisk(currentCount),
+    updatedAt: payload?.updatedAt || payload?.updated_at || fallback.updatedAt || new Date().toISOString(),
+    updated_at: payload?.updated_at || payload?.updatedAt || fallback.updated_at || new Date().toISOString(),
   };
 }
 

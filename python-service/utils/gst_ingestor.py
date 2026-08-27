@@ -219,15 +219,24 @@ class GstFrameIngestor:
         frame_interval = 1.0 / max(self.fps, 0.5)
         last_grabbed_at = 0.0
 
+        target_url = self.rtsp_url
+        if target_url.startswith("http://") or target_url.startswith("https://"):
+            try:
+                from utils.stream_loader import resolve_playable_stream_url
+                target_url = resolve_playable_stream_url(self.rtsp_url, stop_event=self.stop_event)
+            except Exception as e:
+                print(f"[gst-ingestor] Could not resolve playable URL for {self.rtsp_url}: {e}")
+                target_url = self.rtsp_url
+
         while not self.stop_event.is_set():
             capture = None
             try:
-                if self.rtsp_url.isdigit():
-                    capture = cv2.VideoCapture(int(self.rtsp_url))
+                if target_url.isdigit():
+                    capture = cv2.VideoCapture(int(target_url))
                 else:
-                    if self.rtsp_url.startswith("rtsp://"):
-                        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|stimeout;2000000"
-                    capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+                    if target_url.startswith("rtsp://"):
+                        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|stimeout;5000000"
+                    capture = cv2.VideoCapture(target_url, cv2.CAP_FFMPEG)
 
                 if capture is None or not capture.isOpened():
                     if capture is not None:
@@ -239,24 +248,31 @@ class GstFrameIngestor:
                         time.sleep(max(STREAM_RECONNECT_DELAY_SECONDS, 1.5))
                     continue
 
+                frame_interval = 1.0 / max(float(self.fps), 1.0)
+                last_saved_at = 0.0
+                consecutive_misses = 0
+
                 while not self.stop_event.is_set() and capture.isOpened():
                     ok, raw_frame = capture.read()
                     if not ok or raw_frame is None:
-                        time.sleep(0.02)
-                        break
-
-                    now = time.perf_counter()
-                    # Decimate to target FPS without causing buffer stall
-                    if now - last_grabbed_at < frame_interval:
-                        time.sleep(0.005)
+                        consecutive_misses += 1
+                        if consecutive_misses > 15:
+                            break
+                        time.sleep(0.01)
                         continue
 
-                    last_grabbed_at = now
-                    letterboxed_frame, _, _, _ = letterbox_image(raw_frame, (self.width, self.height))
+                    consecutive_misses = 0
+                    now = time.perf_counter()
 
-                    with self.lock:
-                        self.latest_frame = letterboxed_frame
-                        self.last_frame_at = now
+                    # Update latest frame on cadence while continuously draining the RTSP buffer
+                    if now - last_saved_at >= frame_interval:
+                        last_saved_at = now
+                        with self.lock:
+                            self.latest_frame = raw_frame
+                            self.last_frame_at = now
+                    else:
+                        # Yield tiny slice to prevent 100% CPU lock while keeping buffer empty
+                        time.sleep(0.001)
             except Exception as err:
                 print(f"[gst-ingestor] Fallback reader loop warning: {err}")
             finally:
@@ -278,8 +294,12 @@ class GstFrameIngestor:
             time.sleep(0.01)
         return False, None
 
-    def get_latest_frame(self) -> Optional[np.ndarray]:
+    def get_latest_frame(self, max_age: float = 3.0) -> Optional[np.ndarray]:
         with self.lock:
+            if self.latest_frame is None:
+                return None
+            if time.perf_counter() - self.last_frame_at > max_age:
+                return None
             return self.latest_frame
 
     def stop(self) -> None:

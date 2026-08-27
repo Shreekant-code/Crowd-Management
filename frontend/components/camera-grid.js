@@ -29,6 +29,8 @@ function getLiveCount(item = {}) {
     metrics.current_count ??
     metrics.count ??
     metrics.people_count ??
+    metrics.sparse_count ??
+    metrics.raw_count ??
     0;
   return Number(count) || 0;
 }

@@ -174,7 +174,22 @@ export function useStreamManager({ camera, onLiveMetricsChange }) {
 
   useEffect(() => {
     if (camera?.metrics) {
-      const merged = camera.metrics;
+      const merged = {
+        ...(metricsRef.current || {}),
+        ...camera.metrics,
+      };
+      const count = Number(
+        merged.current_count ??
+        merged.count ??
+        merged.people_count ??
+        merged.sparse_count ??
+        merged.raw_count ??
+        0
+      );
+      merged.count = count;
+      merged.current_count = count;
+      merged.people_count = count;
+
       setLiveMetrics(merged);
       metricsRef.current = merged;
 
@@ -199,9 +214,22 @@ export function useStreamManager({ camera, onLiveMetricsChange }) {
     if (!updatedCamera?.id) return;
     cameraRef.current = updatedCamera;
 
+    const count = Number(
+      updatedCamera.metrics?.current_count ??
+      updatedCamera.metrics?.count ??
+      updatedCamera.metrics?.people_count ??
+      updatedCamera.metrics?.sparse_count ??
+      metricsRef.current?.current_count ??
+      metricsRef.current?.count ??
+      0
+    );
+
     const nextMetrics = {
       ...(metricsRef.current || {}),
       ...(updatedCamera.metrics || {}),
+      count,
+      current_count: count,
+      people_count: count,
       updatedAt: updatedCamera.metrics?.updatedAt || updatedCamera.lastFrameAt || new Date().toISOString(),
     };
 

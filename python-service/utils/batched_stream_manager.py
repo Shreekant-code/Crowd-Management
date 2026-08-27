@@ -32,7 +32,8 @@ class BatchedStreamManager:
     """
 
     def __init__(self, backend_url: Optional[str] = None) -> None:
-        self.backend_url = backend_url or os.getenv("BACKEND_URL", "http://localhost:4000")
+        raw_backend = backend_url or os.getenv("BACKEND_URL", "http://127.0.0.1:4000")
+        self.backend_url = raw_backend.replace("localhost", "127.0.0.1")
         self.streams: Dict[str, Dict[str, Any]] = {}
         self.trackers: Dict[str, PersonTracker] = {}
         self.analytics: Dict[str, AnalyticsEngine] = {}
@@ -51,8 +52,15 @@ class BatchedStreamManager:
     def start_camera(self, camera_id: str, stream_url: str, user_id: Optional[str] = None, zone_name: Optional[str] = None) -> Dict[str, Any]:
         with self.lock:
             if camera_id in self.streams:
-                print(f"[batched-manager] Camera already active: {camera_id}")
-                return {"status": "already_active", "camera_id": camera_id}
+                if self.streams[camera_id].get("stream_url") == stream_url:
+                    print(f"[batched-manager] Camera already active: {camera_id}")
+                    return {"status": "already_active", "camera_id": camera_id}
+                print(f"[batched-manager] Updating camera {camera_id} with new URL: {stream_url}")
+                try:
+                    self.streams[camera_id]["ingestor"].stop()
+                except Exception:
+                    pass
+                self.streams.pop(camera_id, None)
 
             print(f"[batched-manager] Initializing camera {camera_id} ({stream_url})")
             ingestor = GstFrameIngestor(
@@ -149,9 +157,9 @@ class BatchedStreamManager:
                             forecaster = self.forecasters.get(cam_id)
                             info = self.streams.get(cam_id, {})
 
-                            if tracker and analytics:
-                                tracks = tracker.update(detections)
-                                count = res.get("count", len(tracks))
+                            if analytics:
+                                tracks = tracker.update(detections) if tracker else []
+                                count = res.get("count", len(detections))
 
                                 metrics = analytics.build_stream_result(
                                     tracks=tracks,
@@ -159,10 +167,10 @@ class BatchedStreamManager:
                                     count=count,
                                     density_mode=res.get("density_mode", False),
                                     overlap_ratio=res.get("overlap_ratio", 0.0),
-                                    sparse_count=res.get("sparse_count"),
-                                    dense_count=res.get("dense_count"),
-                                    dominant_regime=res.get("dominant_regime"),
-                                    dense_clusters=res.get("dense_clusters"),
+                                    sparse_count=res.get("sparse_count", count),
+                                    dense_count=res.get("dense_count", 0),
+                                    dominant_regime=res.get("dominant_regime", "SPARSE"),
+                                    dense_clusters=res.get("dense_clusters", []),
                                     regime_breakdown=res.get("regime_breakdown"),
                                 )
 
@@ -176,16 +184,27 @@ class BatchedStreamManager:
                                     metrics["growth_rate_per_min"] = forecast["growth_rate_per_min"]
                                     metrics["forecaster_latency_ms"] = forecast["latency_ms"]
 
+                                now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                                 metrics["camera_id"] = cam_id
                                 metrics["userId"] = info.get("user_id")
                                 metrics["zoneName"] = info.get("zone_name")
                                 metrics["inference_ms"] = res.get("inference_ms", 25)
-                                metrics["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                                metrics["count"] = count
+                                metrics["current_count"] = count
+                                metrics["people_count"] = count
+                                metrics["head_count"] = count
+                                metrics["detections"] = detections
+                                if "head_points" in res:
+                                    metrics["head_points"] = res["head_points"]
+                                if "head_points_norm" in res:
+                                    metrics["head_points_norm"] = res["head_points_norm"]
+                                metrics["updatedAt"] = now_iso
+                                metrics["updated_at"] = now_iso
 
                                 batch_telemetry[cam_id] = metrics
                                 self.latest_telemetry[cam_id] = metrics
 
-                    # 3. Fire-and-Forget Push to Express Backend
+                    # 3. Push to Express Backend
                     payload = {
                         "timestamp": time.time(),
                         "camera_data": batch_telemetry,
@@ -195,11 +214,13 @@ class BatchedStreamManager:
                         resp = http_session.post(
                             telemetry_endpoint,
                             json=payload,
-                            timeout=0.45,
+                            timeout=2.0,
                             headers={"Content-Type": "application/json"},
                         )
-                    except requests.RequestException:
-                        pass  # Backend down or busy; keep AI cadence running
+                        if resp.status_code != 200:
+                            print(f"[batched-manager] Telemetry POST returned {resp.status_code}: {resp.text[:100]}")
+                    except Exception as push_err:
+                        print(f"[batched-manager] Telemetry push error: {push_err}")
 
                 except Exception as err:
                     print(f"[batched-manager] Cadence processing exception: {err}")

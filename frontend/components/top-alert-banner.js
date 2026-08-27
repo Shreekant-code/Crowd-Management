@@ -18,8 +18,14 @@ export function TopAlertBanner({ cameras = [], global = {}, onInspectCamera }) {
     return null;
   }
 
-  const isCritical = activeAlertCam.metrics?.risk === "Critical";
-  const liveCount = activeAlertCam.metrics?.current_count ?? activeAlertCam.metrics?.count ?? 0;
+  const liveCount = Number(
+    activeAlertCam.metrics?.current_count ??
+    activeAlertCam.metrics?.count ??
+    activeAlertCam.metrics?.people_count ??
+    activeAlertCam.metrics?.sparse_count ??
+    activeAlertCam.metrics?.raw_count ??
+    0
+  );
   const projectedCount = activeAlertCam.metrics?.prediction_10min_count ?? activeAlertCam.metrics?.predicted_crowd ?? liveCount;
   const growthRate = activeAlertCam.metrics?.growth_rate_per_min || 0;
 
